@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Golf Draft Room</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f3;color:#1a1a1a;font-size:14px;}
+.topbar{background:#1a1a1a;color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;}
+.topbar-title{font-size:16px;font-weight:600;}
+.topbar-sub{font-size:12px;color:#888;margin-top:2px;}
+.main{max-width:1400px;margin:0 auto;padding:20px;}
+.btn{background:#1a1a1a;color:#fff;border:none;font-size:13px;font-weight:600;padding:8px 16px;border-radius:7px;cursor:pointer;}
+.btn:hover{background:#333;}
+.btn:disabled{opacity:0.4;cursor:not-allowed;}
+.btn-sm{font-size:12px;padding:5px 10px;border-radius:5px;}
+.btn-outline{background:transparent;color:#1a1a1a;border:1px solid #ccc;}
+.btn-outline:hover{background:#f0f0ee;}
+.btn-green{background:#2e7d32;}
+.btn-green:hover{background:#1b5e20;}
+.btn-red{background:#c62828;}
+.btn-red:hover{background:#b71c1c;}
+.card{background:#fff;border-radius:12px;border:0.5px solid #e0e0e0;padding:16px;}
+/* Setup screen */
+.setup{max-width:600px;margin:40px auto;}
+.setup h2{font-size:22px;font-weight:700;margin-bottom:20px;}
+.form-group{margin-bottom:16px;}
+.form-group label{display:block;font-size:12px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+.form-group input,.form-group textarea{width:100%;border:1px solid #ddd;border-radius:7px;padding:9px 12px;font-size:14px;font-family:inherit;}
+.form-group textarea{height:160px;resize:vertical;font-size:12px;}
+/* Lobby */
+.lobby{max-width:500px;margin:40px auto;text-align:center;}
+.lobby h2{font-size:24px;font-weight:700;margin-bottom:8px;}
+.lobby-sub{color:#666;margin-bottom:24px;}
+.owner-list{text-align:left;margin-bottom:24px;}
+.owner-item{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f5f5f3;border-radius:8px;margin-bottom:6px;font-weight:500;}
+.owner-dot{width:8px;height:8px;border-radius:50%;background:#ccc;}
+.owner-dot.ready{background:#2e7d32;}
+/* Draft room */
+.draft-grid{display:grid;grid-template-columns:280px 1fr 280px;gap:16px;}
+/* Pick order panel */
+.order-panel .pick-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;margin-bottom:4px;font-size:13px;}
+.pick-item.current{background:#fff3cd;font-weight:700;border:1.5px solid #ffc107;}
+.pick-item.done{opacity:0.45;text-decoration:line-through;}
+.pick-item.upcoming{background:#f5f5f3;}
+.pick-num{font-size:10px;color:#888;width:20px;flex-shrink:0;}
+/* Player pool */
+.pool-search{width:100%;border:1px solid #ddd;border-radius:7px;padding:8px 12px;font-size:13px;margin-bottom:10px;}
+.pool-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;max-height:520px;overflow-y:auto;}
+.player-card{background:#f5f5f3;border-radius:8px;padding:10px;cursor:pointer;border:1.5px solid transparent;transition:all .12s;}
+.player-card:hover{border-color:#1a1a1a;background:#eee;}
+.player-card.selected{border-color:#2e7d32;background:#e8f5e9;}
+.player-name{font-size:13px;font-weight:600;}
+.player-rank{font-size:11px;color:#888;}
+.player-odds{display:flex;gap:6px;margin-top:4px;}
+.odds-badge{font-size:10px;background:#1a1a1a;color:#fff;border-radius:4px;padding:2px 5px;}
+.odds-badge.dk{background:#000;}
+.odds-badge.fd{background:#1da1f2;}
+/* Roster panels */
+.roster-panel{}
+.owner-header{font-size:13px;font-weight:700;padding:8px 10px;border-radius:7px 7px 0 0;color:#fff;text-align:center;}
+.roster-slot{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-bottom:0.5px solid #eee;font-size:12px;}
+.roster-slot.empty{color:#aaa;font-style:italic;}
+.slot-label{font-size:10px;color:#888;width:20px;}
+.slot-name{flex:1;}
+.alt-section{border-top:2px solid #eee;margin-top:4px;}
+/* Timer */
+.timer-bar{background:#fff;border-radius:12px;border:0.5px solid #e0e0e0;padding:14px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;}
+.timer-label{font-size:12px;color:#666;}
+.timer-val{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;}
+.timer-val.warn{color:#e65100;}
+.timer-val.danger{color:#c62828;}
+.on-clock{font-size:18px;font-weight:700;}
+.phase-badge{font-size:11px;font-weight:700;padding:3px 8px;border-radius:4px;background:#f0f0ee;color:#666;}
+.phase-badge.alt{background:#fff3cd;color:#856404;}
+/* Autopick modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:100;}
+.modal{background:#fff;border-radius:14px;padding:24px;max-width:400px;width:90%;}
+.modal h3{font-size:18px;font-weight:700;margin-bottom:12px;}
+.autopick-item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#f5f5f3;border-radius:7px;margin-bottom:6px;}
+/* Sub modal */
+.sub-log{margin-top:8px;}
+.sub-item{font-size:11px;color:#666;padding:4px 0;border-bottom:0.5px solid #eee;}
+/* Pot tracker */
+.pot-display{font-size:24px;font-weight:700;color:#2e7d32;}
+/* Undo/redo */
+.undo-row{display:flex;gap:8px;margin-bottom:12px;}
+/* Complete */
+.complete-banner{background:#2e7d32;color:#fff;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px;}
+.complete-banner h2{font-size:22px;font-weight:700;}
+/* Responsive rosters at bottom */
+.roster-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:16px;}
+.roster-col{background:#fff;border-radius:10px;border:0.5px solid #e0e0e0;overflow:hidden;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <div class="topbar-title" id="topbar-title">Golf Draft Room</div>
+    <div class="topbar-sub" id="topbar-sub">Loading...</div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <span id="pot-label" style="font-size:13px;color:#aaa;margin-right:4px;"></span>
+    <button class="btn btn-sm btn-outline" style="color:#fff;border-color:#555;" onclick="showSubModal()">Log Sub</button>
+    <button class="btn btn-sm btn-outline" id="undo-btn" style="color:#fff;border-color:#555;" onclick="doUndo()" disabled>Undo</button>
+    <button class="btn btn-sm btn-outline" id="redo-btn" style="color:#fff;border-color:#555;" onclick="doRedo()" disabled>Redo</button>
+  </div>
+</div>
+
+<div class="main" id="main-content">
+  <div style="text-align:center;padding:60px;color:#888;">Connecting...</div>
+</div>
+
+<!-- Autopick modal -->
+<div class="modal-overlay" id="autopick-modal" style="display:none;">
+  <div class="modal">
+    <h3>Autopick for <span id="autopick-owner"></span></h3>
+    <p style="font-size:13px;color:#666;margin-bottom:14px;">Timer expired. Select a golfer from the list below:</p>
+    <div id="autopick-list"></div>
+    <button class="btn btn-outline btn-sm" style="margin-top:12px;" onclick="closeAutopick()">Cancel</button>
+  </div>
+</div>
+
+<!-- Sub modal -->
+<div class="modal-overlay" id="sub-modal" style="display:none;">
+  <div class="modal">
+    <h3>Log a Substitution</h3>
+    <div class="form-group" style="margin-top:14px;">
+      <label>Owner</label>
+      <select id="sub-owner" style="width:100%;border:1px solid #ddd;border-radius:7px;padding:8px 12px;font-size:14px;">
+        <option value="">Select owner...</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Round (1=Thursday $5, 2=Friday $15)</label>
+      <select id="sub-round" style="width:100%;border:1px solid #ddd;border-radius:7px;padding:8px 12px;font-size:14px;">
+        <option value="1">After Round 1 — $5</option>
+        <option value="2">After Round 2 — $15</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Player out</label>
+      <input type="text" id="sub-from" placeholder="Player being replaced">
+    </div>
+    <div class="form-group">
+      <label>Player in (alternate)</label>
+      <input type="text" id="sub-to" placeholder="Alternate coming in">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px;">
+      <button class="btn" onclick="submitSub()">Log Sub</button>
+      <button class="btn btn-outline" onclick="closeSubModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PROXY = 'https://nba-production-4b6c.up.railway.app';
+const OWNERS = ['Mark','Marc','Jared','Andrew','Zach','Ben','Matt'];
+const OWNER_COLORS = {
+  Mark:'#7B1FA2', Marc:'#F9A825', Jared:'#2E7D32', Andrew:'#E65100',
+  Zach:'#1565C0', Ben:'#C62828', Matt:'#AD1457'
+};
+
+// Get slug from URL param
+const params = new URLSearchParams(location.search);
+const SLUG = params.get('slug') || 'pga-2026';
+
+let state = null;
+let ws = null;
+let timerInterval = null;
+let selectedPlayer = null;
+let searchQuery = '';
+
+// ── WebSocket ─────────────────────────────────────────────────────
+function connect() {
+  const wsUrl = PROXY.replace('https://','wss://').replace('http://','ws://');
+  ws = new WebSocket(`${wsUrl}?slug=${SLUG}`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'state') { state = msg.draft; render(); }
+  };
+  ws.onclose = () => { setTimeout(connect, 2000); };
+  ws.onerror = () => ws.close();
+}
+
+// ── API calls ─────────────────────────────────────────────────────
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers:{'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(`${PROXY}/golf/${SLUG}${path}`, opts);
+  return r.json();
+}
+
+// ── Setup ─────────────────────────────────────────────────────────
+function renderSetup() {
+  document.getElementById('main-content').innerHTML = `
+    <div class="setup">
+      <div class="card">
+        <h2>Commissioner Setup</h2>
+        <p style="color:#666;font-size:13px;margin-bottom:20px;">Configure the draft for this Major.</p>
+        <div class="form-group">
+          <label>Tournament name</label>
+          <input type="text" id="setup-name" placeholder="e.g. 2026 PGA Championship" value="${state?.name||''}">
+        </div>
+        <div class="form-group">
+          <label>Player field (one per line, format: "Name, Rank")</label>
+          <textarea id="setup-field" placeholder="Scottie Scheffler, 1&#10;Rory McIlroy, 2&#10;Jon Rahm, 3&#10;..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Autopick list — bad golfers (one per line)</label>
+          <textarea id="setup-autopick" style="height:100px;" placeholder="John Daly&#10;Happy Gilmore&#10;..."></textarea>
+        </div>
+        <button class="btn" onclick="submitSetup()">Open Lobby</button>
+      </div>
+    </div>`;
+}
+
+async function submitSetup() {
+  const name = document.getElementById('setup-name').value.trim();
+  const fieldRaw = document.getElementById('setup-field').value.trim().split('\n').filter(Boolean);
+  const autopickRaw = document.getElementById('setup-autopick').value.trim().split('\n').filter(Boolean);
+  const field = fieldRaw.map(line => {
+    const parts = line.split(',');
+    return { name: parts[0].trim(), rank: parseInt(parts[1])||999 };
+  });
+  const autopickList = autopickRaw.map(line => ({ name: line.trim() }));
+  await api('/setup', 'POST', { name, field, autopickList });
+}
+
+// ── Lobby ─────────────────────────────────────────────────────────
+function renderLobby() {
+  document.getElementById('main-content').innerHTML = `
+    <div class="lobby">
+      <div class="card">
+        <h2>${state.name || 'Golf Draft'}</h2>
+        <p class="lobby-sub">Share this link with everyone:<br>
+          <code style="font-size:12px;background:#f5f5f3;padding:4px 8px;border-radius:4px;">
+            ${location.href}
+          </code>
+        </p>
+        <div class="owner-list">
+          ${OWNERS.map(o => `
+            <div class="owner-item">
+              <div class="owner-dot ready"></div>
+              <span style="color:${OWNER_COLORS[o]};font-weight:700;">${o}</span>
+            </div>`).join('')}
+        </div>
+        <button class="btn btn-green" onclick="startDraft()" style="width:100%;padding:12px;">
+          Start Draft
+        </button>
+      </div>
+    </div>`;
+}
+
+async function startDraft() {
+  await api('/start', 'POST');
+}
+
+// ── Draft room ────────────────────────────────────────────────────
+function getCurrentPick() {
+  if (!state) return null;
+  const seq = state.currentPhase === 'main' ? state.pickSequence : state.altSequence;
+  return seq?.[state.currentPickIndex];
+}
+
+function getTimerSeconds() {
+  if (!state?.timerStart) return state?.timerDuration || 7200;
+  const elapsed = Math.floor((Date.now() - state.timerStart) / 1000);
+  // Check if outside 8am-9pm ET (timer pauses)
+  const now = new Date();
+  const et = new Date(now.toLocaleString('en-US', {timeZone:'America/New_York'}));
+  const hour = et.getHours();
+  if (hour < 8 || hour >= 21) return state.timerDuration; // paused
+  return Math.max(0, state.timerDuration - elapsed);
+}
+
+function formatTimer(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function renderDraft() {
+  const cur = getCurrentPick();
+  const isAlt = state.currentPhase === 'alternate';
+  const pool = (state.field || []).filter(p =>
+    !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Build pick sequence display
+  const seq = state.pickSequence || [];
+  const altSeq = state.altSequence || [];
+  const allPicks = [...seq, ...altSeq];
+  const globalIdx = state.currentPhase === 'main'
+    ? state.currentPickIndex
+    : seq.length + state.currentPickIndex;
+
+  const pickListHtml = allPicks.map((pick, i) => {
+    const isDone = i < globalIdx;
+    const isCurrent = i === globalIdx;
+    const isAltPick = i >= seq.length;
+    return `<div class="pick-item ${isDone?'done':isCurrent?'current':'upcoming'}">
+      <span class="pick-num">${i+1}</span>
+      <span style="color:${OWNER_COLORS[pick.owner]};font-weight:${isCurrent?'700':'500'}">${pick.owner}</span>
+      ${isAltPick ? '<span style="font-size:10px;background:#fff3cd;padding:1px 4px;border-radius:3px;margin-left:auto;">ALT</span>' : ''}
+    </div>`;
+  }).join('');
+
+  // Build roster columns (bottom)
+  const rosterCols = OWNERS.map(o => {
+    const picks = state.picks[o] || { golfers: [], alternate: null };
+    const slots = Array(4).fill(null).map((_, i) => picks.golfers[i] || null);
+    return `<div class="roster-col">
+      <div class="owner-header" style="background:${OWNER_COLORS[o]}">${o}</div>
+      ${slots.map((g, i) => `
+        <div class="roster-slot ${g?'':'empty'}">
+          <span class="slot-label">${i+1}</span>
+          <span class="slot-name">${g ? g.name : '—'}</span>
+        </div>`).join('')}
+      <div class="alt-section">
+        <div class="roster-slot ${picks.alternate?'':'empty'}">
+          <span class="slot-label" style="color:#856404;">A</span>
+          <span class="slot-name">${picks.alternate ? picks.alternate.name : '—'}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('main-content').innerHTML = `
+    <div class="timer-bar">
+      <div>
+        <div class="timer-label">${isAlt ? 'ALTERNATE ROUND' : `ROUND ${cur?.round || ''} OF 4`}</div>
+        <div class="on-clock" style="color:${cur ? OWNER_COLORS[cur.owner] : '#1a1a1a'}">
+          ${cur ? `${cur.owner} is on the clock` : 'Draft complete!'}
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div class="timer-label">Time remaining</div>
+        <div class="timer-val" id="timer-display">2:00:00</div>
+      </div>
+    </div>
+
+    <div class="draft-grid">
+      <!-- Pick order -->
+      <div>
+        <div class="card" style="margin-bottom:10px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:10px;">Pick Order</div>
+          <div style="max-height:460px;overflow-y:auto;">${pickListHtml}</div>
+        </div>
+      </div>
+
+      <!-- Player pool -->
+      <div>
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;">
+              Available Players (${state.field?.length || 0})
+            </div>
+            ${cur ? `<button class="btn btn-sm" onclick="confirmPick()" ${!selectedPlayer?'disabled':''}>
+              Pick ${selectedPlayer?.name || '...'}
+            </button>` : ''}
+          </div>
+          <input class="pool-search" placeholder="Search players..." oninput="searchQuery=this.value;renderDraft();" value="${searchQuery}">
+          <div class="pool-grid">
+            ${pool.map(p => `
+              <div class="player-card ${selectedPlayer?.name===p.name?'selected':''}" onclick="selectPlayer(${JSON.stringify(p).replace(/"/g,'&quot;')})">
+                <div class="player-name">${p.name}</div>
+                <div class="player-rank">Rank #${p.rank||'—'}</div>
+                ${p.odds_dk || p.odds_fd ? `<div class="player-odds">
+                  ${p.odds_dk ? `<span class="odds-badge dk">DK ${p.odds_dk}</span>` : ''}
+                  ${p.odds_fd ? `<span class="odds-badge fd">FD ${p.odds_fd}</span>` : ''}
+                </div>` : ''}
+              </div>`).join('')}
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub log + pot -->
+      <div>
+        <div class="card" style="margin-bottom:10px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:8px;">Pot</div>
+          <div class="pot-display">$${state.pot || 175}</div>
+        </div>
+        <div class="card">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:8px;">Sub Log</div>
+          ${state.subs?.length ? state.subs.map(s => `
+            <div class="sub-item">
+              <strong>${s.owner}</strong>: ${s.from} → ${s.to} 
+              <span style="color:#2e7d32;font-weight:600;">$${s.cost}</span>
+            </div>`).join('') : '<div style="color:#aaa;font-size:12px;">No subs yet</div>'}
+        </div>
+      </div>
+    </div>
+
+    <!-- Rosters -->
+    <div class="roster-grid">${rosterCols}</div>
+  `;
+
+  // Start timer
+  clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const secs = getTimerSeconds();
+    const el = document.getElementById('timer-display');
+    if (!el) return;
+    el.textContent = formatTimer(secs);
+    el.className = 'timer-val' + (secs < 300 ? ' danger' : secs < 900 ? ' warn' : '');
+    if (secs === 0) {
+      clearInterval(timerInterval);
+      showAutopick();
+    }
+  }, 1000);
+}
+
+function selectPlayer(p) {
+  selectedPlayer = p;
+  renderDraft();
+}
+
+async function confirmPick() {
+  if (!selectedPlayer) return;
+  const cur = getCurrentPick();
+  if (!cur) return;
+  await api('/pick', 'POST', { owner: cur.owner, golfer: selectedPlayer });
+  selectedPlayer = null;
+}
+
+function showAutopick() {
+  const cur = getCurrentPick();
+  if (!cur || !state) return;
+  document.getElementById('autopick-owner').textContent = cur.owner;
+  document.getElementById('autopick-list').innerHTML = (state.autopickList || []).map(p => `
+    <div class="autopick-item">
+      <span>${p.name}</span>
+      <button class="btn btn-sm btn-red" onclick="autopick('${p.name}')">Assign</button>
+    </div>`).join('') || '<div style="color:#aaa;">No autopick list set</div>';
+  document.getElementById('autopick-modal').style.display = 'flex';
+}
+
+async function autopick(name) {
+  const cur = getCurrentPick();
+  if (!cur) return;
+  await api('/pick', 'POST', { owner: cur.owner, golfer: { name, rank: 999 }, isAutopick: true });
+  closeAutopick();
+}
+
+function closeAutopick() { document.getElementById('autopick-modal').style.display = 'none'; }
+
+async function doUndo() { await api('/undo', 'POST'); }
+async function doRedo() { await api('/redo', 'POST'); }
+
+// ── Sub modal ─────────────────────────────────────────────────────
+function showSubModal() {
+  const sel = document.getElementById('sub-owner');
+  sel.innerHTML = '<option value="">Select owner...</option>' +
+    OWNERS.map(o => `<option value="${o}">${o}</option>`).join('');
+  document.getElementById('sub-modal').style.display = 'flex';
+}
+function closeSubModal() { document.getElementById('sub-modal').style.display = 'none'; }
+async function submitSub() {
+  const owner = document.getElementById('sub-owner').value;
+  const round = parseInt(document.getElementById('sub-round').value);
+  const from = document.getElementById('sub-from').value.trim();
+  const to = document.getElementById('sub-to').value.trim();
+  if (!owner || !from || !to) return alert('Please fill all fields');
+  await api('/sub', 'POST', { owner, from, to, round });
+  closeSubModal();
+}
+
+// ── Complete ──────────────────────────────────────────────────────
+function renderComplete() {
+  const rosterCols = OWNERS.map(o => {
+    const picks = state.picks[o] || { golfers: [], alternate: null };
+    return `<div class="roster-col">
+      <div class="owner-header" style="background:${OWNER_COLORS[o]}">${o}</div>
+      ${picks.golfers.map((g, i) => `
+        <div class="roster-slot">
+          <span class="slot-label">${i+1}</span>
+          <span class="slot-name">${g.name}</span>
+        </div>`).join('')}
+      <div class="alt-section">
+        <div class="roster-slot ${picks.alternate?'':'empty'}">
+          <span class="slot-label" style="color:#856404;">A</span>
+          <span class="slot-name">${picks.alternate ? picks.alternate.name : '—'}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('main-content').innerHTML = `
+    <div class="complete-banner">
+      <h2>Draft Complete!</h2>
+      <p style="margin-top:6px;opacity:.85;">All picks are locked in. Good luck!</p>
+    </div>
+    <div class="roster-grid">${rosterCols}</div>
+    ${state.subs?.length ? `<div class="card" style="margin-top:16px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:8px;">Subs — Pot: $${state.pot}</div>
+      ${state.subs.map(s => `<div class="sub-item"><strong>${s.owner}</strong>: ${s.from} → ${s.to} <span style="color:#2e7d32;">$${s.cost}</span></div>`).join('')}
+    </div>` : ''}
+  `;
+}
+
+// ── Main render ───────────────────────────────────────────────────
+function render() {
+  if (!state) return;
+
+  document.getElementById('topbar-title').textContent = state.name || 'Golf Draft Room';
+  document.getElementById('topbar-sub').textContent = `sylvieratner.com/golf/draft?slug=${SLUG}`;
+  document.getElementById('pot-label').textContent = `Pot: $${state.pot || 175}`;
+
+  const undoBtn = document.getElementById('undo-btn');
+  const redoBtn = document.getElementById('redo-btn');
+  if (undoBtn) undoBtn.disabled = !state.undoStack?.length;
+  if (redoBtn) redoBtn.disabled = !state.redoStack?.length;
+
+  if (state.status === 'setup') renderSetup();
+  else if (state.status === 'lobby') renderLobby();
+  else if (state.status === 'drafting') renderDraft();
+  else if (state.status === 'complete') renderComplete();
+}
+
+// ── Init ──────────────────────────────────────────────────────────
+connect();
+</script>
+</body>
+</html>
