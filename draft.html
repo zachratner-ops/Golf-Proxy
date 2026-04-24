@@ -151,25 +151,7 @@ function connect() {
   ws = new WebSocket(`${wsUrl}?slug=${SLUG}`);
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'state') {
-      const prevStatus = state?.status;
-      state = msg.draft;
-      // If a pick was just made, clear selection
-      if (prevStatus === 'drafting' && state.status === 'drafting') {
-        // Check if it was our pick that triggered this — clear selected
-        const searchEl = document.getElementById('pool-search-input');
-        const hadFocus = searchEl && document.activeElement === searchEl;
-        const cursorPos = searchEl ? searchEl.selectionStart : 0;
-        render();
-        // Restore search focus and cursor position
-        if (hadFocus) {
-          const newSearch = document.getElementById('pool-search-input');
-          if (newSearch) { newSearch.focus(); newSearch.setSelectionRange(cursorPos, cursorPos); }
-        }
-      } else {
-        render();
-      }
-    }
+    if (msg.type === 'state') { state = msg.draft; render(); }
   };
   ws.onclose = () => setTimeout(connect, 2000);
   ws.onerror = () => ws.close();
@@ -322,9 +304,6 @@ function formatTimer(secs) {
 function renderDraft() {
   const cur = getCurrentPick();
   const isAlt = state.currentPhase === 'alternate';
-  const pool = (state.field || []).filter(p =>
-    !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
 
   const seq = state.pickSequence || [];
   const altSeq = state.altSequence || [];
@@ -363,18 +342,44 @@ function renderDraft() {
     </div>`;
   }).join('');
 
-  // Autopick bad list panel (right side)
   const autopickHtml = (state.autopickList || []).map(p => `
     <div class="autopick-pool-item">
       <span>${p.name}</span>
       ${cur ? `<button class="btn btn-sm btn-red" onclick="assignAutopick('${p.name.replace(/'/g,"\\'")}')">Assign</button>` : ''}
     </div>`).join('') || '<div style="color:#aaa;font-size:12px;">No bad golfer list set</div>';
 
+  // If draft screen already exists, do a partial update to preserve search input focus
+  const existingDraftGrid = document.getElementById('draft-pick-order');
+  if (existingDraftGrid) {
+    // Partial update — only touch pick order, on-clock, rosters, autopick list
+    existingDraftGrid.innerHTML = pickListHtml;
+    const onClock = document.getElementById('on-clock-label');
+    if (onClock) {
+      onClock.textContent = cur ? `${cur.owner} is on the clock` : 'Draft complete!';
+      onClock.style.color = cur ? OWNER_COLORS[cur.owner] : '#2e7d32';
+    }
+    const roundLabel = document.getElementById('round-label');
+    if (roundLabel) roundLabel.textContent = isAlt ? 'ALTERNATE ROUND' : `ROUND ${cur?.round||''} OF 4`;
+    const rosterGrid = document.getElementById('roster-grid');
+    if (rosterGrid) rosterGrid.innerHTML = rosterCols;
+    const autopickPanel = document.getElementById('autopick-panel');
+    if (autopickPanel) autopickPanel.innerHTML = autopickHtml;
+    const availCount = document.getElementById('avail-count');
+    if (availCount) availCount.textContent = `Available (${state.field?.length||0})`;
+    // Update pool (removes picked player) but preserve search focus
+    const searchEl = document.getElementById('pool-search-input');
+    const hasFocus = searchEl && document.activeElement === searchEl;
+    updatePool(searchQuery);
+    if (hasFocus) searchEl.focus();
+    return;
+  }
+
+  // Full initial render
   document.getElementById('main-content').innerHTML = `
     <div class="timer-bar">
       <div>
-        <div class="timer-label">${isAlt ? 'ALTERNATE ROUND' : `ROUND ${cur?.round||''} OF 4`}</div>
-        <div class="on-clock" style="color:${cur ? OWNER_COLORS[cur.owner] : '#2e7d32'}">
+        <div class="timer-label" id="round-label">${isAlt ? 'ALTERNATE ROUND' : `ROUND ${cur?.round||''} OF 4`}</div>
+        <div class="on-clock" id="on-clock-label" style="color:${cur ? OWNER_COLORS[cur.owner] : '#2e7d32'}">
           ${cur ? `${cur.owner} is on the clock` : 'Draft complete!'}
         </div>
       </div>
@@ -385,57 +390,41 @@ function renderDraft() {
     </div>
 
     <div class="draft-grid">
-      <!-- Left: Pick order -->
       <div>
         <div class="card">
           <div class="section-hdr">Pick Order</div>
-          <div style="max-height:520px;overflow-y:auto;">${pickListHtml}</div>
+          <div style="max-height:520px;overflow-y:auto;" id="draft-pick-order">${pickListHtml}</div>
         </div>
       </div>
 
-      <!-- Center: Player pool -->
       <div>
         <div class="card">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-            <div class="section-hdr" style="margin-bottom:0;">Available (${state.field?.length||0})</div>
+            <div class="section-hdr" style="margin-bottom:0;" id="avail-count">Available (${state.field?.length||0})</div>
             <div style="display:flex;gap:6px;">
               <button class="btn btn-sm btn-outline" onclick="importOdds()">Refresh Odds</button>
-              ${cur ? `<button class="btn btn-sm btn-green" id="pick-btn" onclick="confirmPick()" ${!selectedPlayer?'disabled':''}>
-                ${selectedPlayer?.name ? `Pick ${selectedPlayer.name}` : 'Pick...'}
-              </button>` : ''}
+              ${cur ? `<button class="btn btn-sm btn-green" id="pick-btn" onclick="confirmPick()" disabled>Pick...</button>` : ''}
             </div>
           </div>
-          <input class="pool-search" id="pool-search-input" placeholder="Search players..." oninput="updatePool(this.value)" value="${searchQuery}">
-          <div class="pool-grid" id="pool-grid">
-            ${pool.map(p => `
-              <div class="player-card ${selectedPlayer?.name===p.name?'selected':''}" onclick="selectPlayer(${JSON.stringify(p).replace(/"/g,'&quot;')})">
-                <div class="player-name">${p.name}</div>
-                ${(p.odds_dk||p.odds_fd) ? `<div class="player-odds">
-                  ${p.odds_dk ? `<span class="odds-badge odds-dk">DK ${p.odds_dk}</span>` : ''}
-                  ${p.odds_fd ? `<span class="odds-badge odds-fd">FD ${p.odds_fd}</span>` : ''}
-                </div>` : ''}
-              </div>`).join('')}
-          </div>
+          <input class="pool-search" id="pool-search-input" placeholder="Search players..." oninput="updatePool(this.value)" value="">
+          <div class="pool-grid" id="pool-grid"></div>
         </div>
       </div>
 
-      <!-- Right: Bad golfer autopick list -->
       <div>
         <div class="card">
           <div class="section-hdr">Bad Golfer List</div>
           <p style="font-size:11px;color:#888;margin-bottom:10px;">Assign to current pick if timer expires</p>
-          <div style="max-height:520px;overflow-y:auto;">${autopickHtml}</div>
+          <div style="max-height:520px;overflow-y:auto;" id="autopick-panel">${autopickHtml}</div>
         </div>
       </div>
     </div>
 
-    <!-- Rosters -->
-    <div class="roster-grid">${rosterCols}</div>
+    <div class="roster-grid" id="roster-grid">${rosterCols}</div>
   `;
 
+  updatePool('');
   clearInterval(timerInterval);
-  // Populate pool grid separately to preserve search state
-  setTimeout(() => updatePool(searchQuery), 0);
   timerInterval = setInterval(() => {
     const secs = getTimerSeconds();
     const el = document.getElementById('timer-display');
