@@ -123,7 +123,12 @@ app.post('/golf/:slug/setup', (req, res) => {
   if (name) draft.name = name;
   if (field) draft.field = field;
   if (autopickList) draft.autopickList = autopickList;
-  if (owners && owners.length >= 2) draft.owners = owners;
+  if (owners && owners.length >= 2) {
+    draft.owners = owners;
+    // Reinitialize picks for new owner list
+    draft.picks = {};
+    owners.forEach(o => { draft.picks[o] = { golfers: [], alternate: null }; });
+  }
   draft.pot = draft.owners.length * 25;
   draft.status = 'lobby';
   broadcast(req.params.slug, { type: 'state', draft });
