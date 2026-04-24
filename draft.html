@@ -151,7 +151,25 @@ function connect() {
   ws = new WebSocket(`${wsUrl}?slug=${SLUG}`);
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'state') { state = msg.draft; render(); }
+    if (msg.type === 'state') {
+      const prevStatus = state?.status;
+      state = msg.draft;
+      // If a pick was just made, clear selection
+      if (prevStatus === 'drafting' && state.status === 'drafting') {
+        // Check if it was our pick that triggered this — clear selected
+        const searchEl = document.getElementById('pool-search-input');
+        const hadFocus = searchEl && document.activeElement === searchEl;
+        const cursorPos = searchEl ? searchEl.selectionStart : 0;
+        render();
+        // Restore search focus and cursor position
+        if (hadFocus) {
+          const newSearch = document.getElementById('pool-search-input');
+          if (newSearch) { newSearch.focus(); newSearch.setSelectionRange(cursorPos, cursorPos); }
+        }
+      } else {
+        render();
+      }
+    }
   };
   ws.onclose = () => setTimeout(connect, 2000);
   ws.onerror = () => ws.close();
@@ -416,7 +434,8 @@ function renderDraft() {
   `;
 
   clearInterval(timerInterval);
-  updatePool(searchQuery);
+  // Populate pool grid separately to preserve search state
+  setTimeout(() => updatePool(searchQuery), 0);
   timerInterval = setInterval(() => {
     const secs = getTimerSeconds();
     const el = document.getElementById('timer-display');
