@@ -382,13 +382,13 @@ function renderDraft() {
             <div class="section-hdr" style="margin-bottom:0;">Available (${state.field?.length||0})</div>
             <div style="display:flex;gap:6px;">
               <button class="btn btn-sm btn-outline" onclick="importOdds()">Refresh Odds</button>
-              ${cur ? `<button class="btn btn-sm btn-green" onclick="confirmPick()" ${!selectedPlayer?'disabled':''}>
-                Pick ${selectedPlayer?.name||'...'}
+              ${cur ? `<button class="btn btn-sm btn-green" id="pick-btn" onclick="confirmPick()" ${!selectedPlayer?'disabled':''}>
+                ${selectedPlayer?.name ? `Pick ${selectedPlayer.name}` : 'Pick...'}
               </button>` : ''}
             </div>
           </div>
-          <input class="pool-search" placeholder="Search players..." oninput="searchQuery=this.value;renderDraft();" value="${searchQuery}">
-          <div class="pool-grid">
+          <input class="pool-search" id="pool-search-input" placeholder="Search players..." oninput="updatePool(this.value)" value="${searchQuery}">
+          <div class="pool-grid" id="pool-grid">
             ${pool.map(p => `
               <div class="player-card ${selectedPlayer?.name===p.name?'selected':''}" onclick="selectPlayer(${JSON.stringify(p).replace(/"/g,'&quot;')})">
                 <div class="player-name">${p.name}</div>
@@ -416,6 +416,7 @@ function renderDraft() {
   `;
 
   clearInterval(timerInterval);
+  updatePool(searchQuery);
   timerInterval = setInterval(() => {
     const secs = getTimerSeconds();
     const el = document.getElementById('timer-display');
@@ -481,15 +482,45 @@ async function applyManualOdds(fieldName, selectId) {
   sel.closest('.autopick-item').style.opacity = '0.4';
 }
 
-function selectPlayer(p) { selectedPlayer = p; renderDraft(); }
+function updatePool(query) {
+  searchQuery = query;
+  const pool = (state.field || []).filter(p =>
+    !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  const grid = document.getElementById('pool-grid');
+  if (!grid) return;
+  grid.innerHTML = pool.map(p => `
+    <div class="player-card ${selectedPlayer?.name===p.name?'selected':''}" onclick="selectPlayer(${JSON.stringify(p).replace(/"/g,'&quot;')})">
+      <div class="player-name">${p.name}</div>
+      ${(p.odds_dk||p.odds_fd) ? `<div class="player-odds">
+        ${p.odds_dk ? `<span class="odds-badge odds-dk">DK ${p.odds_dk}</span>` : ''}
+        ${p.odds_fd ? `<span class="odds-badge odds-fd">FD ${p.odds_fd}</span>` : ''}
+      </div>` : ''}
+    </div>`).join('');
+}
+
+function updatePickBtn() {
+  const btn = document.getElementById('pick-btn');
+  if (!btn) return;
+  btn.textContent = selectedPlayer ? `Pick ${selectedPlayer.name}` : 'Pick...';
+  btn.disabled = !selectedPlayer;
+}
+
+function selectPlayer(p) {
+  selectedPlayer = p;
+  updatePickBtn();
+  updatePool(searchQuery);
+}
 
 async function confirmPick() {
   if (!selectedPlayer) return;
   const cur = getCurrentPick();
   if (!cur) return;
-  await api('/pick', 'POST', { owner: cur.owner, golfer: selectedPlayer });
+  const picked = selectedPlayer;
   selectedPlayer = null;
   searchQuery = '';
+  updatePickBtn();
+  await api('/pick', 'POST', { owner: cur.owner, golfer: picked });
 }
 
 async function assignAutopick(name) {
