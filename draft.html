@@ -489,6 +489,7 @@ async function confirmPick() {
   if (!cur) return;
   await api('/pick', 'POST', { owner: cur.owner, golfer: selectedPlayer });
   selectedPlayer = null;
+  searchQuery = '';
 }
 
 async function assignAutopick(name) {
