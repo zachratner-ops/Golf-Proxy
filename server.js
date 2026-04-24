@@ -145,13 +145,15 @@ app.post('/golf/:slug/start', (req, res) => {
   broadcast(req.params.slug, { type: 'state', draft });
   res.json(draft);
 });
+
+// Reset draft back to setup
+app.post('/golf/:slug/reset', (req, res) => {
   delete drafts[req.params.slug];
   const fresh = getOrCreateDraft(req.params.slug);
   broadcast(req.params.slug, { type: 'state', draft: fresh });
   res.json(fresh);
 });
 
-// Start draft — accepts custom order from frontend randomizer
 // Make a pick
 app.post('/golf/:slug/pick', (req, res) => {
   const draft = getOrCreateDraft(req.params.slug);
