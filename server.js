@@ -112,7 +112,7 @@ async function fetchGolfScores(eventId) {
       const statusName = c.status?.type?.name || '';
       const cut = statusName.includes('CUT') || statusName.includes('WD') || statusName.includes('DQ');
       // ESPN returns score as a pre-calculated string e.g. "-12", "+5", "E"
-      const scoreStr = c.score || 'E';
+      const scoreStr = c.score?.displayValue || c.statistics?.find(s => s.name === 'scoreToPar')?.displayValue || 'E';
       let toPar = 0;
       if (scoreStr === 'E' || scoreStr === '--') {
         toPar = 0;
