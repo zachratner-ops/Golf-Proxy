@@ -351,10 +351,8 @@ app.post('/golf/:slug/field-remove', async (req, res) => {
 });
 
 
+app.post('/golf/:slug/eventid', async (req, res) => {
   const slug = req.params.slug;
-  const eventId = req.body.eventId;
-  getOrCreateDraft(slug).espnEventId = eventId;
-  await fbUpdate(`golf/${slug}/live`, { espnEventId: eventId });
   // Trigger an immediate poll for this slug
   console.log(`[poller] Event ID set for ${slug} — triggering immediate fetch`);
   fetchGolfScores(eventId).then(result => {
