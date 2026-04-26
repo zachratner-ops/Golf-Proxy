@@ -88,8 +88,6 @@ async function fetchGolfScores(eventId) {
     // Try scoreboard endpoint first (more reliable from server-side)
     // Falls back to leaderboard endpoint if scoreboard doesn't have the event
     const endpoints = [
-      `/apis/site/v2/sports/golf/pga/scoreboard?dates=20260101-20261231&event=${eventId}`,
-      `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}&league=pga`,
       `/apis/site/v2/sports/golf/leaderboard?event=${eventId}`,
     ];
 
