@@ -58,6 +58,7 @@ function getOrCreateDraft(slug) {
       pickSequence: [], altSequence: [],
       picks: {}, currentPickIndex: 0,
       currentPhase: 'main',
+      makeupPicks: {},
       subs: [], pot: 25 * OWNERS.length,
       timerStart: null, timerDuration: 7200,
       locked: false, undoStack: [], redoStack: [],
@@ -241,7 +242,14 @@ app.post('/golf/:slug/pick', async (req, res) => {
   const draft = getOrCreateDraft(slug);
   if (draft.status !== 'drafting') return res.status(400).json({ error: 'Not drafting' });
   const { owner, golfer, isAutopick } = req.body;
-  draft.undoStack.push({ field:[...draft.field], picks:JSON.parse(JSON.stringify(draft.picks)), currentPickIndex:draft.currentPickIndex, currentPhase:draft.currentPhase, status:draft.status });
+  draft.undoStack.push({
+    field: [...draft.field],
+    picks: JSON.parse(JSON.stringify(draft.picks)),
+    makeupPicks: JSON.parse(JSON.stringify(draft.makeupPicks || {})),
+    currentPickIndex: draft.currentPickIndex,
+    currentPhase: draft.currentPhase,
+    status: draft.status
+  });
   draft.redoStack = [];
   draft.field = draft.field.filter(p => p.name !== golfer.name);
   if (draft.currentPhase === 'main') {
@@ -265,7 +273,14 @@ app.post('/golf/:slug/undo', async (req, res) => {
   const slug = req.params.slug;
   const draft = getOrCreateDraft(slug);
   if (!draft.undoStack.length) return res.status(400).json({ error: 'Nothing to undo' });
-  draft.redoStack.push({ field:[...draft.field], picks:JSON.parse(JSON.stringify(draft.picks)), currentPickIndex:draft.currentPickIndex, currentPhase:draft.currentPhase, status:draft.status });
+  draft.redoStack.push({
+    field: [...draft.field],
+    picks: JSON.parse(JSON.stringify(draft.picks)),
+    makeupPicks: JSON.parse(JSON.stringify(draft.makeupPicks || {})),
+    currentPickIndex: draft.currentPickIndex,
+    currentPhase: draft.currentPhase,
+    status: draft.status
+  });
   const prev = draft.undoStack.pop();
   Object.assign(draft, prev);
   draft.timerStart = Date.now();
@@ -278,7 +293,14 @@ app.post('/golf/:slug/redo', async (req, res) => {
   const slug = req.params.slug;
   const draft = getOrCreateDraft(slug);
   if (!draft.redoStack.length) return res.status(400).json({ error: 'Nothing to redo' });
-  draft.undoStack.push({ field:[...draft.field], picks:JSON.parse(JSON.stringify(draft.picks)), currentPickIndex:draft.currentPickIndex, currentPhase:draft.currentPhase, status:draft.status });
+  draft.undoStack.push({
+    field: [...draft.field],
+    picks: JSON.parse(JSON.stringify(draft.picks)),
+    makeupPicks: JSON.parse(JSON.stringify(draft.makeupPicks || {})),
+    currentPickIndex: draft.currentPickIndex,
+    currentPhase: draft.currentPhase,
+    status: draft.status
+  });
   const next = draft.redoStack.pop();
   Object.assign(draft, next);
   draft.timerStart = Date.now();
@@ -287,7 +309,48 @@ app.post('/golf/:slug/redo', async (req, res) => {
   res.json(draft);
 });
 
-app.post('/golf/:slug/eventid', async (req, res) => {
+app.post('/golf/:slug/makeup-set', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { owner, slotIndex } = req.body;
+  if (!draft.makeupPicks) draft.makeupPicks = {};
+  draft.makeupPicks[owner] = slotIndex;
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  res.json(draft);
+});
+
+app.post('/golf/:slug/makeup-clear', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { owner, realPickName, placeholderName } = req.body;
+  if (!draft.makeupPicks) draft.makeupPicks = {};
+  const slotIndex = draft.makeupPicks[owner];
+  if (slotIndex !== undefined && slotIndex !== null) {
+    // Replace placeholder in picks with real pick
+    draft.picks[owner].golfers[slotIndex] = { name: realPickName };
+    // Remove real pick from field
+    draft.field = draft.field.filter(p => p.name !== realPickName);
+    // Add placeholder back to field
+    if (placeholderName) draft.field.push({ name: placeholderName });
+    delete draft.makeupPicks[owner];
+  }
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  res.json(draft);
+});
+
+app.post('/golf/:slug/field-remove', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { name } = req.body;
+  draft.field = draft.field.filter(p => p.name !== name);
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  res.json({ ok: true });
+});
+
+
   const slug = req.params.slug;
   const eventId = req.body.eventId;
   getOrCreateDraft(slug).espnEventId = eventId;
