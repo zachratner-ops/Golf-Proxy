@@ -303,6 +303,28 @@ app.get('/golf/:slug/scores', async (req, res) => {
   res.json(scores);
 });
 
+// Diagnostic: returns raw ESPN response so we can see exactly what they send
+app.get('/golf/diag/espn', async (req, res) => {
+  const eventId = req.query.eventId || '401811941';
+  try {
+    const result = await httpsGet('site.web.api.espn.com',
+      `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}`,
+      {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.espn.com/golf/leaderboard',
+        'Origin': 'https://www.espn.com'
+      });
+    res.json({
+      status: result.status,
+      bodyPreview: result.body.slice(0, 500),
+      bodyLength: result.body.length
+    });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
