@@ -19,6 +19,7 @@ try {
 
 async function fbSet(path, val) { if (!fbDb) return; try { await fbDb.ref(path).set(val); } catch(e) { console.error('fbSet error:', e.message); } }
 async function fbUpdate(path, val) { if (!fbDb) return; try { await fbDb.ref(path).update(val); } catch(e) { console.error('fbUpdate error:', e.message); } }
+async function fbGet(path) { if (!fbDb) return null; try { const s = await fbDb.ref(path).once('value'); return s.val(); } catch(e) { console.error('fbGet error:', e.message); return null; } }
 async function syncDraft(slug, draft) { await fbSet(`golf/${slug}/draft`, { ...draft, undoStack: [], redoStack: [] }); }
 
 // ── Express ────────────────────────────────────────────────────────
@@ -86,7 +87,12 @@ async function fetchGolfScores(eventId) {
   try {
     const { status, body } = await httpsGet('site.api.espn.com',
       `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}`,
-      { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://www.espn.com/' });
+      {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.espn.com/golf/leaderboard',
+        'Origin': 'https://www.espn.com'
+      });
     if (status !== 200) return { error: `ESPN returned ${status}` };
     const data = JSON.parse(body);
     const players = {};
@@ -104,6 +110,50 @@ async function fetchGolfScores(eventId) {
   } catch(e) { return { error: e.message }; }
 }
 
+// ── Server-side score poller ───────────────────────────────────────
+// Runs every 30 minutes. Scans Firebase for all live slugs with an
+// espnEventId set, fetches ESPN scores, writes results back to Firebase.
+// Clients pick up updates via their onValue(liveRef()) listener.
+
+async function pollAllLiveSlugs() {
+  if (!fbDb) return;
+  try {
+    const golfNode = await fbGet('golf');
+    if (!golfNode) return;
+    const slugs = Object.keys(golfNode).filter(k => k !== 'history');
+    for (const slug of slugs) {
+      const liveData = golfNode[slug]?.live;
+      const draftData = golfNode[slug]?.draft;
+      // Only poll if status is 'live' and an ESPN event ID is set
+      if (draftData?.status !== 'live') continue;
+      const eventId = liveData?.espnEventId;
+      if (!eventId) continue;
+      console.log(`[poller] Fetching scores for ${slug} (event ${eventId})`);
+      const result = await fetchGolfScores(eventId);
+      if (result.error) {
+        console.error(`[poller] ESPN error for ${slug}:`, result.error);
+        continue;
+      }
+      await fbUpdate(`golf/${slug}/live`, {
+        scores: result.players,
+        lastUpdated: result.updated
+      });
+      console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players`);
+    }
+  } catch(e) {
+    console.error('[poller] Error:', e.message);
+  }
+}
+
+const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+// Start polling after a short delay to let Firebase connect
+setTimeout(() => {
+  pollAllLiveSlugs(); // immediate first run
+  setInterval(pollAllLiveSlugs, POLL_INTERVAL_MS);
+  console.log(`[poller] Score poller started — interval: 30min`);
+}, 5000);
+
 // ── WebSocket ──────────────────────────────────────────────────────
 const clients = {};
 function broadcast(slug, msg) {
@@ -113,7 +163,7 @@ function broadcast(slug, msg) {
 }
 
 // ── Routes ─────────────────────────────────────────────────────────
-app.get('/health', (req, res) => res.json({ ok: true, service: 'golf', firebase: !!fbDb }));
+app.get('/health', (req, res) => res.json({ ok: true, service: 'golf', firebase: !!fbDb, poller: 'active' }));
 
 app.get('/golf/:slug', (req, res) => {
   if (req.params.slug === 'history') return res.json({});
@@ -218,17 +268,26 @@ app.post('/golf/:slug/redo', async (req, res) => {
 
 app.post('/golf/:slug/eventid', async (req, res) => {
   const slug = req.params.slug;
-  const draft = getOrCreateDraft(slug);
-  draft.espnEventId = req.body.eventId;
-  broadcast(slug, { type: 'state', draft });
-  await fbUpdate(`golf/${slug}/live`, { espnEventId: req.body.eventId });
+  const eventId = req.body.eventId;
+  getOrCreateDraft(slug).espnEventId = eventId;
+  await fbUpdate(`golf/${slug}/live`, { espnEventId: eventId });
+  // Trigger an immediate poll for this slug
+  console.log(`[poller] Event ID set for ${slug} — triggering immediate fetch`);
+  fetchGolfScores(eventId).then(result => {
+    if (!result.error) {
+      fbUpdate(`golf/${slug}/live`, { scores: result.players, lastUpdated: result.updated });
+      console.log(`[poller] Immediate scores written for ${slug}`);
+    } else {
+      console.error(`[poller] Immediate fetch error for ${slug}:`, result.error);
+    }
+  });
   res.json({ ok: true });
 });
 
 app.get('/golf/:slug/scores', async (req, res) => {
-  const draft = getOrCreateDraft(req.params.slug);
-  if (!draft.espnEventId) return res.status(400).json({ error: 'No ESPN event ID configured' });
-  const scores = await fetchGolfScores(draft.espnEventId);
+  const eventId = req.query.eventId || getOrCreateDraft(req.params.slug).espnEventId;
+  if (!eventId) return res.status(400).json({ error: 'No ESPN event ID configured' });
+  const scores = await fetchGolfScores(eventId);
   res.json(scores);
 });
 
