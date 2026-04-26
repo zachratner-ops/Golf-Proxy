@@ -477,11 +477,92 @@ app.post('/golf/:slug/odds', async (req, res) => {
   res.json({ matched: matched.length, unmatched, availableOdds, updated: result.updated });
 });
 
-app.post('/golf/:slug/odds/manual', async (req, res) => {
+app.post('/golf/:slug/odds/seed', async (req, res) => {
   const slug = req.params.slug;
   const draft = getOrCreateDraft(slug);
-  const { fieldName, oddsName } = req.body;
-  if (!draft.oddsCache) return res.status(400).json({ error: 'No odds cache' });
+  // Realistic pre-tournament Masters 2026 odds (DraftKings / FanDuel approximations)
+  const seedOdds = {
+    'Scottie Scheffler':  { dk: '+450',  fd: '+500'  },
+    'Rory McIlroy':       { dk: '+600',  fd: '+650'  },
+    'Tommy Fleetwood':    { dk: '+1400', fd: '+1400' },
+    'Collin Morikawa':    { dk: '+1600', fd: '+1600' },
+    'Xander Schauffele':  { dk: '+1800', fd: '+1800' },
+    'Ludvig Aberg':       { dk: '+2000', fd: '+2000' },
+    'Bryson DeChambeau':  { dk: '+2200', fd: '+2200' },
+    'Viktor Hovland':     { dk: '+2500', fd: '+2500' },
+    'Chris Gotterup':     { dk: '+2800', fd: '+3000' },
+    'Jon Rahm':           { dk: '+3000', fd: '+3000' },
+    'Hideki Matsuyama':   { dk: '+3000', fd: '+3000' },
+    'Jordan Spieth':      { dk: '+3500', fd: '+3500' },
+    'Justin Thomas':      { dk: '+3500', fd: '+4000' },
+    'Min Woo Lee':        { dk: '+4000', fd: '+4000' },
+    'Shane Lowry':        { dk: '+4000', fd: '+4000' },
+    'Corey Conners':      { dk: '+4500', fd: '+4500' },
+    'Patrick Cantlay':    { dk: '+5000', fd: '+5000' },
+    'Robert MacIntyre':   { dk: '+5000', fd: '+5500' },
+    'Justin Rose':        { dk: '+5000', fd: '+5000' },
+    'Tyrrell Hatton':     { dk: '+5000', fd: '+5000' },
+    'Wyndham Clark':      { dk: '+5500', fd: '+5500' },
+    'Matt Fitzpatrick':   { dk: '+5500', fd: '+6000' },
+    'Akshay Bhatia':      { dk: '+6000', fd: '+6000' },
+    'Cameron Young':      { dk: '+6000', fd: '+6000' },
+    'Harris English':     { dk: '+6500', fd: '+7000' },
+    'Sam Burns':          { dk: '+6500', fd: '+6500' },
+    'Keegan Bradley':     { dk: '+7000', fd: '+7000' },
+    'Max Homa':           { dk: '+7000', fd: '+7000' },
+    'Sungjae Im':         { dk: '+7000', fd: '+7500' },
+    'Brooks Koepka':      { dk: '+7500', fd: '+8000' },
+    'Sepp Straka':        { dk: '+8000', fd: '+8000' },
+    'Jason Day':          { dk: '+8000', fd: '+8000' },
+    'Russell Henley':     { dk: '+9000', fd: '+9000' },
+    'Patrick Reed':       { dk: '+9000', fd: '+10000'},
+    'Ryan Fox':           { dk: '+10000',fd: '+10000'},
+    'Nick Taylor':        { dk: '+10000',fd: '+10000'},
+    'Cameron Smith':      { dk: '+10000',fd: '+10000'},
+    'Jacob Bridgeman':    { dk: '+12000',fd: '+12500'},
+    'Brian Harman':       { dk: '+12000',fd: '+12000'},
+    'Adam Scott':         { dk: '+15000',fd: '+15000'},
+    'Dustin Johnson':     { dk: '+15000',fd: '+15000'},
+    'J.J. Spaun':         { dk: '+15000',fd: '+15000'},
+    'Andrew Novak':       { dk: '+15000',fd: '+15000'},
+    'Kurt Kitayama':      { dk: '+15000',fd: '+15000'},
+    'Aldrich Potgieter':  { dk: '+20000',fd: '+20000'},
+    'Maverick McNealy':   { dk: '+20000',fd: '+20000'},
+    'Ben Griffin':        { dk: '+20000',fd: '+20000'},
+    'Nico Echavarria':    { dk: '+20000',fd: '+20000'},
+    'Carlos Ortiz':       { dk: '+25000',fd: '+25000'},
+    'Li Haotong':         { dk: '+25000',fd: '+25000'},
+    'Brian Campbell':     { dk: '+25000',fd: '+25000'},
+    'Harry Hall':         { dk: '+25000',fd: '+25000'},
+    'Marco Penge':        { dk: '+30000',fd: '+30000'},
+    'Sergio Garcia':      { dk: '+30000',fd: '+30000'},
+    'Zach Johnson':       { dk: '+50000',fd: '+50000'},
+    'Fred Couples':       { dk: '+50000',fd: '+50000'},
+    'Bubba Watson':       { dk: '+50000',fd: '+50000'},
+    'Danny Willett':      { dk: '+50000',fd: '+50000'},
+    'Charl Schwartzel':   { dk: '+50000',fd: '+50000'},
+    'Mike Weir':          { dk: '+50000',fd: '+50000'},
+    'Vijay Singh':        { dk: '+50000',fd: '+50000'},
+    'Jose Maria Olazabal':{ dk: '+50000',fd: '+50000'},
+  };
+  draft.oddsCache = seedOdds;
+  const matched = [], unmatched = [];
+  draft.field = draft.field.map(p => {
+    const normalizedP = p.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    const matchKey = Object.keys(seedOdds).find(k => k.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase() === normalizedP);
+    if (matchKey) { matched.push(p.name); return { ...p, odds_dk: seedOdds[matchKey].dk, odds_fd: seedOdds[matchKey].fd }; }
+    unmatched.push({ name: p.name });
+    return p;
+  });
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  const availableOdds = Object.entries(seedOdds).map(([name,o]) => ({ name, dk: o.dk, fd: o.fd })).sort((a,b) => a.name.localeCompare(b.name));
+  res.json({ matched: matched.length, unmatched, availableOdds, updated: new Date().toISOString(), seeded: true });
+});
+
+
+app.post('/golf/:slug/odds/manual', async (req, res) => {
+  const slug = req.params.slug; return res.status(400).json({ error: 'No odds cache' });
   const odds = draft.oddsCache[oddsName];
   if (!odds) return res.status(404).json({ error: 'Not found: ' + oddsName });
   draft.field = draft.field.map(p => p.name===fieldName ? {...p, odds_dk:odds.dk, odds_fd:odds.fd} : p);
