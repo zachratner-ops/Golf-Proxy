@@ -121,7 +121,7 @@ async function fetchGolfScores(eventId) {
         if (isNaN(toPar)) toPar = 0;
       }
       const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
-      players[name] = { score: toPar, display, cut, status: statusName };
+      const safeKey = name.replace(/[.#$[]/]/g, '_'); players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name };
     });
     console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed`);
     return { players, updated: new Date().toISOString() };
