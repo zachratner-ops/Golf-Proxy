@@ -99,15 +99,27 @@ async function fetchGolfScores(eventId) {
     const competitors = data?.events?.[0]?.competitions?.[0]?.competitors || [];
     competitors.forEach(c => {
       const name = c.athlete?.displayName;
+      if (!name) return;
       const statusName = c.status?.type?.name || '';
       const cut = statusName.includes('CUT') || statusName.includes('WD') || statusName.includes('DQ');
+      // ESPN returns score as a pre-calculated string e.g. "-12", "+5", "E"
+      const scoreStr = c.score || 'E';
       let toPar = 0;
-      (c.linescores || []).forEach(ls => { toPar += (ls.value || 0); });
-      const display = toPar===0 ? 'E' : (toPar>0 ? `+${toPar}` : `${toPar}`);
-      if (name) players[name] = { score: toPar, display, cut, status: statusName };
+      if (scoreStr === 'E' || scoreStr === '--') {
+        toPar = 0;
+      } else {
+        toPar = parseInt(scoreStr, 10);
+        if (isNaN(toPar)) toPar = 0;
+      }
+      const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
+      players[name] = { score: toPar, display, cut, status: statusName };
     });
+    console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed`);
     return { players, updated: new Date().toISOString() };
-  } catch(e) { return { error: e.message }; }
+  } catch(e) {
+    console.error('[scores] fetch error:', e.message);
+    return { error: e.message };
+  }
 }
 
 // ── Server-side score poller ───────────────────────────────────────
