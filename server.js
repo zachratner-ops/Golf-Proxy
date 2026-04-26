@@ -313,6 +313,28 @@ app.get('/golf/:slug/scores', async (req, res) => {
 });
 
 // Diagnostic: tests multiple ESPN endpoints from Railway's network
+
+// Dump raw first competitor object so we can see ESPN's score field structure
+app.get('/golf/diag/competitor', async (req, res) => {
+  const eventId = req.query.eventId || '401811941';
+  try {
+    const { status, body } = await httpsGet('site.web.api.espn.com',
+      `/apis/site/v2/sports/golf/leaderboard?event=${eventId}`,
+      {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.espn.com/golf/leaderboard',
+        'Origin': 'https://www.espn.com'
+      });
+    const data = JSON.parse(body);
+    const competitors = data?.events?.[0]?.competitions?.[0]?.competitors || [];
+    // Return first 3 competitors raw so we can see the score field location
+    res.json({ count: competitors.length, sample: competitors.slice(0, 3) });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get('/golf/diag/espn', async (req, res) => {
   const eventId = req.query.eventId || '401811941';
   const paths = [
