@@ -85,14 +85,25 @@ function generatePickSequence(order) {
 
 async function fetchGolfScores(eventId) {
   try {
-    const { status, body } = await httpsGet('site.web.api.espn.com',
-      `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}`,
-      {
+    // Try scoreboard endpoint first (more reliable from server-side)
+    // Falls back to leaderboard endpoint if scoreboard doesn't have the event
+    const endpoints = [
+      `/apis/site/v2/sports/golf/pga/scoreboard?dates=20260101-20261231&event=${eventId}`,
+      `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}&league=pga`,
+      `/apis/site/v2/sports/golf/leaderboard?event=${eventId}`,
+    ];
+
+    let status, body;
+    for (const path of endpoints) {
+      const result = await httpsGet('site.web.api.espn.com', path, {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json',
         'Referer': 'https://www.espn.com/golf/leaderboard',
         'Origin': 'https://www.espn.com'
       });
+      console.log(`[scores] ${path} -> ${result.status}`);
+      if (result.status === 200) { status = result.status; body = result.body; break; }
+    }
     if (status !== 200) return { error: `ESPN returned ${status}` };
     const data = JSON.parse(body);
     const players = {};
@@ -303,26 +314,31 @@ app.get('/golf/:slug/scores', async (req, res) => {
   res.json(scores);
 });
 
-// Diagnostic: returns raw ESPN response so we can see exactly what they send
+// Diagnostic: tests multiple ESPN endpoints from Railway's network
 app.get('/golf/diag/espn', async (req, res) => {
   const eventId = req.query.eventId || '401811941';
-  try {
-    const result = await httpsGet('site.web.api.espn.com',
-      `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}`,
-      {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://www.espn.com/golf/leaderboard',
-        'Origin': 'https://www.espn.com'
-      });
-    res.json({
-      status: result.status,
-      bodyPreview: result.body.slice(0, 500),
-      bodyLength: result.body.length
-    });
-  } catch(e) {
-    res.json({ error: e.message });
+  const paths = [
+    `/apis/site/v2/sports/golf/pga/scoreboard?dates=20260101-20261231&event=${eventId}`,
+    `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}&league=pga`,
+    `/apis/site/v2/sports/golf/leaderboard?event=${eventId}`,
+    `/apis/site/v2/sports/golf/pga/scoreboard`,
+  ];
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Referer': 'https://www.espn.com/golf/leaderboard',
+    'Origin': 'https://www.espn.com'
+  };
+  const results = [];
+  for (const path of paths) {
+    try {
+      const r = await httpsGet('site.web.api.espn.com', path, headers);
+      results.push({ path, status: r.status, preview: r.body.slice(0, 200) });
+    } catch(e) {
+      results.push({ path, error: e.message });
+    }
   }
+  res.json(results);
 });
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
