@@ -122,7 +122,9 @@ async function fetchGolfScores(eventId) {
         if (isNaN(toPar)) toPar = 0;
       }
       const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
-      const safeKey = name.replace(/[^a-zA-Z0-9 _-]/g, "_"); players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name };
+      const normalizedName = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const safeKey = normalizedName.replace(/[^a-zA-Z0-9 _-]/g, '_');
+      players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name };
     });
     console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed`);
     return { players, updated: new Date().toISOString() };
