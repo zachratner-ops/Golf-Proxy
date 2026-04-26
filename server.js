@@ -461,14 +461,21 @@ app.post('/golf/:slug/odds', async (req, res) => {
   const result = await fetchGolfOdds();
   if (result.error) return res.status(502).json(result);
   const matched = [], unmatched = [];
-  const availableOdds = Object.entries(result.odds).map(([name,o])=>({name,dk:o.dk,fd:o.fd})).sort((a,b)=>a.name.localeCompare(b.name));
-  draft.oddsCache = result.odds;
+  // Sanitize keys for Firebase
+  const safeOdds = {};
+  Object.entries(result.odds).forEach(([name, val]) => {
+    const safeKey = name.replace(/[.#$\/\[\]]/g, '_');
+    safeOdds[safeKey] = { ...val, displayName: name };
+  });
+  const availableOdds = Object.entries(safeOdds).map(([,o])=>({name:o.displayName,dk:o.dk,fd:o.fd})).sort((a,b)=>a.name.localeCompare(b.name));
+  draft.oddsCache = safeOdds;
   draft.field = draft.field.map(p => {
-    const exact = result.odds[p.name];
+    const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
+    const exact = safeOdds[safeKey];
     if (exact) { matched.push(p.name); return {...p, odds_dk:exact.dk, odds_fd:exact.fd}; }
     const lastName = p.name.split(' ').pop().toLowerCase();
-    const matchKey = Object.keys(result.odds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
-    if (matchKey) { matched.push(p.name); return {...p, odds_dk:result.odds[matchKey].dk, odds_fd:result.odds[matchKey].fd}; }
+    const matchKey = Object.keys(safeOdds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
+    if (matchKey) { matched.push(p.name); return {...p, odds_dk:safeOdds[matchKey].dk, odds_fd:safeOdds[matchKey].fd}; }
     unmatched.push({ name: p.name });
     return p;
   });
@@ -480,7 +487,6 @@ app.post('/golf/:slug/odds', async (req, res) => {
 app.post('/golf/:slug/odds/seed', async (req, res) => {
   const slug = req.params.slug;
   const draft = getOrCreateDraft(slug);
-  // Realistic pre-tournament Masters 2026 odds (DraftKings / FanDuel approximations)
   const seedOdds = {
     'Scottie Scheffler':  { dk: '+450',  fd: '+500'  },
     'Rory McIlroy':       { dk: '+600',  fd: '+650'  },
@@ -523,7 +529,7 @@ app.post('/golf/:slug/odds/seed', async (req, res) => {
     'Brian Harman':       { dk: '+12000',fd: '+12000'},
     'Adam Scott':         { dk: '+15000',fd: '+15000'},
     'Dustin Johnson':     { dk: '+15000',fd: '+15000'},
-    'J.J. Spaun':         { dk: '+15000',fd: '+15000'},
+    'JJ Spaun':           { dk: '+15000',fd: '+15000'},
     'Andrew Novak':       { dk: '+15000',fd: '+15000'},
     'Kurt Kitayama':      { dk: '+15000',fd: '+15000'},
     'Aldrich Potgieter':  { dk: '+20000',fd: '+20000'},
@@ -545,18 +551,28 @@ app.post('/golf/:slug/odds/seed', async (req, res) => {
     'Vijay Singh':        { dk: '+50000',fd: '+50000'},
     'Jose Maria Olazabal':{ dk: '+50000',fd: '+50000'},
   };
-  draft.oddsCache = seedOdds;
+  // Sanitize keys for Firebase (no dots, #, $, /, [, ])
+  const safeOdds = {};
+  Object.entries(seedOdds).forEach(([name, val]) => {
+    const safeKey = name.replace(/[.#$\/\[\]]/g, '_');
+    safeOdds[safeKey] = { ...val, displayName: name };
+  });
+  draft.oddsCache = safeOdds;
   const matched = [], unmatched = [];
   draft.field = draft.field.map(p => {
-    const normalizedP = p.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-    const matchKey = Object.keys(seedOdds).find(k => k.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase() === normalizedP);
-    if (matchKey) { matched.push(p.name); return { ...p, odds_dk: seedOdds[matchKey].dk, odds_fd: seedOdds[matchKey].fd }; }
+    const normalizedP = p.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[.#$\/\[\]]/g,'_');
+    const matchKey = Object.keys(safeOdds).find(k => k.toLowerCase() === normalizedP);
+    if (matchKey) { matched.push(p.name); return { ...p, odds_dk: safeOdds[matchKey].dk, odds_fd: safeOdds[matchKey].fd }; }
+    // Also try last name match
+    const lastName = normalizedP.split(' ').pop();
+    const lastMatch = Object.keys(safeOdds).find(k => k.split(' ').pop().toLowerCase() === lastName);
+    if (lastMatch) { matched.push(p.name); return { ...p, odds_dk: safeOdds[lastMatch].dk, odds_fd: safeOdds[lastMatch].fd }; }
     unmatched.push({ name: p.name });
     return p;
   });
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
-  const availableOdds = Object.entries(seedOdds).map(([name,o]) => ({ name, dk: o.dk, fd: o.fd })).sort((a,b) => a.name.localeCompare(b.name));
+  const availableOdds = Object.entries(safeOdds).map(([,o]) => ({ name: o.displayName, dk: o.dk, fd: o.fd })).sort((a,b) => a.name.localeCompare(b.name));
   res.json({ matched: matched.length, unmatched, availableOdds, updated: new Date().toISOString(), seeded: true });
 });
 
