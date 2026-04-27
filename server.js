@@ -69,6 +69,43 @@ function getOrCreateDraft(slug) {
   return drafts[slug];
 }
 
+// Rehydrate a single slug from Firebase into memory
+async function rehydrateDraft(slug) {
+  const saved = await fbGet(`golf/${slug}/draft`);
+  if (!saved || !saved.status || saved.status === 'setup') return null;
+  // Restore full draft state — merge over blank to ensure all keys exist
+  drafts[slug] = {
+    ...getOrCreateDraft(slug), // defaults
+    ...saved,
+    undoStack: [], // never persisted
+    redoStack: [], // never persisted
+  };
+  console.log(`[rehydrate] Restored ${slug} (status: ${drafts[slug].status}, picks: ${Object.keys(drafts[slug].picks || {}).length} owners)`);
+  return drafts[slug];
+}
+
+// On startup, warm all active slugs from Firebase so a container restart
+// during a live draft doesn't lose state
+async function warmCache() {
+  if (!fbDb) return;
+  try {
+    const golfNode = await fbGet('golf');
+    if (!golfNode) return;
+    const slugs = Object.keys(golfNode).filter(k => k !== 'history');
+    let warmed = 0;
+    for (const slug of slugs) {
+      const status = golfNode[slug]?.draft?.status;
+      if (status && status !== 'setup') {
+        await rehydrateDraft(slug);
+        warmed++;
+      }
+    }
+    console.log(`[rehydrate] Warmed ${warmed} active slug(s) from Firebase`);
+  } catch(e) {
+    console.error('[rehydrate] Warm cache error:', e.message);
+  }
+}
+
 function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
@@ -171,9 +208,10 @@ async function pollAllLiveSlugs() {
 
 const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
-// Start polling after a short delay to let Firebase connect
-setTimeout(() => {
-  pollAllLiveSlugs(); // immediate first run
+// Start polling and warm cache after Firebase connects
+setTimeout(async () => {
+  await warmCache();
+  await pollAllLiveSlugs();
   setInterval(pollAllLiveSlugs, POLL_INTERVAL_MS);
   console.log(`[poller] Score poller started — interval: 30min`);
 }, 5000);
@@ -189,9 +227,11 @@ function broadcast(slug, msg) {
 // ── Routes ─────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true, service: 'golf', firebase: !!fbDb, poller: 'active' }));
 
-app.get('/golf/:slug', (req, res) => {
+app.get('/golf/:slug', async (req, res) => {
   if (req.params.slug === 'history') return res.json({});
-  res.json(getOrCreateDraft(req.params.slug));
+  const slug = req.params.slug;
+  if (!drafts[slug]) await rehydrateDraft(slug);
+  res.json(getOrCreateDraft(slug));
 });
 
 app.post('/golf/:slug/setup', async (req, res) => {
@@ -358,11 +398,22 @@ app.post('/golf/:slug/field-remove', async (req, res) => {
 });
 
 
+app.post('/golf/:slug/scores/override', async (req, res) => {
+  const slug = req.params.slug;
+  const { playerName, score, cut } = req.body;
+  if (!playerName) return res.status(400).json({ error: 'playerName required' });
+  const safeKey = playerName.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9 _-]/g,'_');
+  const toPar = parseInt(score, 10) || 0;
+  const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
+  await fbUpdate(`golf/${slug}/live/scores/${safeKey}`, {
+    score: toPar, display, cut: !!cut, status: cut ? 'STATUS_CUT' : 'STATUS_IN_PROGRESS', espnName: playerName, manual: true
+  });
+  res.json({ ok: true, key: safeKey, score: toPar, display });
+});
+
+
 app.post('/golf/:slug/eventid', async (req, res) => {
   const slug = req.params.slug;
-  const eventId = req.body.eventId;
-  getOrCreateDraft(slug).espnEventId = eventId;
-  await fbUpdate(`golf/${slug}/live`, { espnEventId: eventId });
   console.log(`[poller] Event ID set for ${slug} — triggering immediate fetch`);
   fetchGolfScores(eventId).then(result => {
     if (!result.error) {
@@ -583,10 +634,13 @@ app.post('/golf/:slug/odds/seed', async (req, res) => {
 
 
 app.post('/golf/:slug/odds/manual', async (req, res) => {
-  const slug = req.params.slug; return res.status(400).json({ error: 'No odds cache' });
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { fieldName, oddsName } = req.body;
+  if (!draft.oddsCache) return res.status(400).json({ error: 'No odds cache — fetch or seed odds first' });
   const odds = draft.oddsCache[oddsName];
-  if (!odds) return res.status(404).json({ error: 'Not found: ' + oddsName });
-  draft.field = draft.field.map(p => p.name===fieldName ? {...p, odds_dk:odds.dk, odds_fd:odds.fd} : p);
+  if (!odds) return res.status(404).json({ error: 'Not found in cache: ' + oddsName });
+  draft.field = draft.field.map(p => p.name === fieldName ? { ...p, odds_dk: odds.dk, odds_fd: odds.fd } : p);
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
   res.json({ ok: true });
