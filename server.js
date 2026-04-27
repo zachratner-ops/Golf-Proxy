@@ -198,10 +198,10 @@ async function pollAllLiveSlugs() {
       // Remove any manually overridden players so ESPN doesn't clobber them
       const manualOverrides = liveData?.manualOverrides || {};
       Object.keys(manualOverrides).forEach(key => delete result.players[key]);
-      await fbUpdate(`golf/${slug}/live`, {
-        scores: result.players,
-        lastUpdated: result.updated
-      });
+      // Write individual score keys to preserve override entries in Firebase
+      const scoreUpdates = { lastUpdated: result.updated };
+      Object.entries(result.players).forEach(([k,v]) => { scoreUpdates[`scores/${k}`] = v; });
+      await fbUpdate(`golf/${slug}/live`, scoreUpdates);
       console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players (${Object.keys(manualOverrides).length} manual overrides preserved)`);
     }
   } catch(e) {
