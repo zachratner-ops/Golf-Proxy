@@ -518,7 +518,7 @@ async function fetchGolfOdds() {
     let foundEvent = null;
     for (const sport of golfSports) {
       const { status, body } = await httpsGet('api.the-odds-api.com',
-        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel`,
+        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel&oddsFormat=american`,
         { 'Accept': 'application/json' });
       if (status === 401) return { error: 'Invalid Odds API key' };
       if (status !== 200) continue;
