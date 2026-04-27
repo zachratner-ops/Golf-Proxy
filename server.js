@@ -195,11 +195,14 @@ async function pollAllLiveSlugs() {
         console.error(`[poller] ESPN error for ${slug}:`, result.error);
         continue;
       }
+      // Remove any manually overridden players so ESPN doesn't clobber them
+      const manualOverrides = liveData?.manualOverrides || {};
+      Object.keys(manualOverrides).forEach(key => delete result.players[key]);
       await fbUpdate(`golf/${slug}/live`, {
         scores: result.players,
         lastUpdated: result.updated
       });
-      console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players`);
+      console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players (${Object.keys(manualOverrides).length} manual overrides preserved)`);
     }
   } catch(e) {
     console.error('[poller] Error:', e.message);
@@ -405,10 +408,21 @@ app.post('/golf/:slug/scores/override', async (req, res) => {
   const safeKey = playerName.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9 _-]/g,'_');
   const toPar = parseInt(score, 10) || 0;
   const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
+  // Write score and register in manualOverrides so poller never clobbers it
   await fbUpdate(`golf/${slug}/live/scores/${safeKey}`, {
     score: toPar, display, cut: !!cut, status: cut ? 'STATUS_CUT' : 'STATUS_IN_PROGRESS', espnName: playerName, manual: true
   });
+  await fbUpdate(`golf/${slug}/live/manualOverrides`, { [safeKey]: playerName });
   res.json({ ok: true, key: safeKey, score: toPar, display });
+});
+
+app.post('/golf/:slug/scores/override-clear', async (req, res) => {
+  const slug = req.params.slug;
+  const { safeKey } = req.body;
+  if (!safeKey) return res.status(400).json({ error: 'safeKey required' });
+  // Remove from manualOverrides — ESPN will overwrite on next poll
+  await fbUpdate(`golf/${slug}/live/manualOverrides`, { [safeKey]: null });
+  res.json({ ok: true });
 });
 
 
