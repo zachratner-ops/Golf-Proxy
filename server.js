@@ -500,28 +500,49 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b
 
 async function fetchGolfOdds() {
   try {
-    const { status, body } = await httpsGet('api.the-odds-api.com',
-      `/v4/sports/golf_pga/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel`,
+    // Step 1: Discover active golf sport keys — free call, doesn't count against quota
+    const { status: sStatus, body: sBody } = await httpsGet('api.the-odds-api.com',
+      `/v4/sports?apiKey=${ODDS_API_KEY}&all=true`,
       { 'Accept': 'application/json' });
-    if (status === 404) return { error: 'No active golf event found — try closer to tournament week' };
-    if (status === 401) return { error: 'Invalid Odds API key' };
-    if (status !== 200) return { error: `Odds API returned ${status}` };
-    const data = JSON.parse(body);
-    if (!data.length) return { error: 'No golf odds available right now' };
+    if (sStatus === 401) return { error: 'Invalid Odds API key' };
+    if (sStatus !== 200) return { error: `Odds API /sports returned ${sStatus}` };
+
+    const allSports = JSON.parse(sBody);
+    // Filter to active golf sports that have outrights (covers PGA, majors, signature events, etc.)
+    const golfSports = allSports.filter(s => s.group === 'Golf' && s.has_outrights && s.active);
+    if (!golfSports.length) return { error: 'No active golf events found in Odds API' };
+    console.log(`[odds] Active golf keys: ${golfSports.map(s => s.key).join(', ')}`);
+
+    // Step 2: Try each active golf key until we find one with odds from DK/FD
     const odds = {};
-    data.forEach(event => {
-      (event.bookmakers||[]).forEach(bm => {
-        (bm.markets||[]).forEach(market => {
-          (market.outcomes||[]).forEach(outcome => {
-            const name = outcome.name, price = outcome.price;
-            if (!odds[name]) odds[name] = {};
-            if (bm.key==='draftkings') odds[name].dk = price>0?`+${price}`:`${price}`;
-            if (bm.key==='fanduel') odds[name].fd = price>0?`+${price}`:`${price}`;
+    let foundEvent = null;
+    for (const sport of golfSports) {
+      const { status, body } = await httpsGet('api.the-odds-api.com',
+        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel`,
+        { 'Accept': 'application/json' });
+      if (status === 401) return { error: 'Invalid Odds API key' };
+      if (status !== 200) continue;
+      const data = JSON.parse(body);
+      if (!data.length) continue;
+      foundEvent = sport.title;
+      data.forEach(event => {
+        (event.bookmakers || []).forEach(bm => {
+          (bm.markets || []).forEach(market => {
+            (market.outcomes || []).forEach(outcome => {
+              const name = outcome.name, price = outcome.price;
+              if (!odds[name]) odds[name] = {};
+              if (bm.key === 'draftkings') odds[name].dk = price > 0 ? `+${price}` : `${price}`;
+              if (bm.key === 'fanduel')    odds[name].fd = price > 0 ? `+${price}` : `${price}`;
+            });
           });
         });
       });
-    });
-    return { odds, updated: new Date().toISOString() };
+      if (Object.keys(odds).length) break; // got what we need, stop iterating
+    }
+
+    if (!Object.keys(odds).length) return { error: 'No golf odds available right now' };
+    console.log(`[odds] Fetched ${Object.keys(odds).length} players for: ${foundEvent}`);
+    return { odds, updated: new Date().toISOString(), event: foundEvent };
   } catch(e) { return { error: e.message }; }
 }
 
