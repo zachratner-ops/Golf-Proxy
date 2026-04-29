@@ -681,6 +681,110 @@ app.post('/golf/:slug/odds/manual', async (req, res) => {
   res.json({ ok: true });
 });
 
+
+// ── GroupMe ────────────────────────────────────────────────────────
+const GROUPME_BOT_TEST = 'af8ec9a284c08aa0c9d0c2e231';
+const GROUPME_BOT_LIVE = '36cc1e93ae09476fa837b1b4bd';
+
+async function postGolfGroupMe(slug, botId) {
+  // Read draft picks and live scores from Firebase
+  const [draftData, liveData] = await Promise.all([
+    fbGet(`golf/${slug}/draft`),
+    fbGet(`golf/${slug}/live`),
+  ]);
+  if (!draftData) throw new Error('No draft data found for slug: ' + slug);
+  const scores = (liveData && liveData.scores) || {};
+  const tournamentName = draftData.name || slug;
+  const pot = draftData.pot || 0;
+  const owners = draftData.owners || [];
+  const picks = draftData.picks || {};
+
+  // Helper: normalize a golfer name to Firebase key (mirrors fetchGolfScores)
+  function toKey(name) {
+    return name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 _-]/g, '_');
+  }
+
+  // Helper: last name only
+  function lastName(name) {
+    const parts = name.trim().split(' ');
+    return parts[parts.length - 1];
+  }
+
+  // Build owner standings
+  const standings = owners.map(owner => {
+    const golfers = (picks[owner] && picks[owner].golfers) || [];
+    const golferScores = golfers.map(g => {
+      const key = toKey(g.name);
+      const s = scores[key];
+      const cut = s ? s.cut : false;
+      const toPar = s ? s.score : 0;
+      const display = s ? s.display : 'E';
+      return { name: g.name, toPar, display, cut };
+    });
+
+    // Top 3 active (non-cut) by score ascending (most negative = best)
+    const active = golferScores.filter(g => !g.cut).sort((a, b) => a.toPar - b.toPar);
+    const top3 = active.slice(0, 3);
+    const total = top3.reduce((sum, g) => sum + g.toPar, 0);
+    const totalDisplay = total === 0 ? 'E' : (total > 0 ? '+' + total : '' + total);
+
+    return { owner, total, totalDisplay, golferScores };
+  });
+
+  // Sort by total ascending (lower = better)
+  standings.sort((a, b) => a.total - b.total);
+
+  // Format message
+  const medals = ['🏆', '2️⃣ ', '3️⃣ ', '4️⃣ ', '5️⃣ ', '6️⃣ ', '7️⃣ '];
+  const lines = standings.map((s, i) => {
+    const golferLine = s.golferScores.map(g => {
+      if (g.cut) return '✂️ ' + lastName(g.name);
+      return lastName(g.name) + ' ' + g.display;
+    }).join(' | ');
+    return medals[i] + '  ' + s.totalDisplay + '  ' + s.owner + '\n         (' + golferLine + ')';
+  });
+
+  const now = new Date();
+  const dateStr = (now.getMonth() + 1) + '/' + now.getDate();
+  const msg = [
+    '⛳ ' + tournamentName + ' · ' + dateStr,
+    '',
+    ...lines,
+    '',
+    '💰 $' + pot + ' pot · Winner takes all',
+    '',
+    '🔗 gyou.in/golf-live.html?slug=' + slug,
+  ].join('\n');
+
+  // Post to GroupMe
+  const body = JSON.stringify({ bot_id: botId, text: msg });
+  await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.groupme.com',
+      path: '/v3/bots/post',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, r => { r.resume(); r.on('end', resolve); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+  console.log('[groupme] Posted for slug:', slug, 'bot:', botId);
+  return { ok: true, standings: standings.map(s => ({ owner: s.owner, total: s.totalDisplay })) };
+}
+
+app.post('/golf/:slug/groupme', async (req, res) => {
+  const slug = req.params.slug;
+  const botId = (req.body && req.body.botId) || GROUPME_BOT_TEST;
+  try {
+    const result = await postGolfGroupMe(slug, botId);
+    res.json(result);
+  } catch(e) {
+    console.error('[groupme] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Server + WebSocket ─────────────────────────────────────────────
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
