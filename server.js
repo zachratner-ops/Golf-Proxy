@@ -149,19 +149,37 @@ async function fetchGolfScores(eventId) {
       if (!name) return;
       const statusName = c.status?.type?.name || '';
       const cut = statusName.includes('CUT') || statusName.includes('WD') || statusName.includes('DQ');
-      // ESPN returns score as a pre-calculated string e.g. "-12", "+5", "E"
+
+      // Total score to par
       const scoreStr = c.score?.displayValue || c.statistics?.find(s => s.name === 'scoreToPar')?.displayValue || 'E';
       let toPar = 0;
-      if (scoreStr === 'E' || scoreStr === '--') {
-        toPar = 0;
-      } else {
-        toPar = parseInt(scoreStr, 10);
-        if (isNaN(toPar)) toPar = 0;
-      }
+      if (scoreStr === 'E' || scoreStr === '--') { toPar = 0; }
+      else { toPar = parseInt(scoreStr, 10); if (isNaN(toPar)) toPar = 0; }
       const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
+
+      // This round's score — from linescores array, last active round
+      let roundScore = null;
+      const linescores = c.linescores || [];
+      if (linescores.length > 0) {
+        // Find the last round with a real score (not '--')
+        for (let i = linescores.length - 1; i >= 0; i--) {
+          const val = linescores[i]?.displayValue;
+          if (val && val !== '--' && val !== '') {
+            const parsed = parseInt(val, 10);
+            if (!isNaN(parsed)) { roundScore = parsed; break; }
+          }
+        }
+      }
+
+      // Position (leaderboard rank)
+      const position = c.status?.position?.displayName || c.status?.position?.abbreviation || null;
+
+      // Thru / current hole — ESPN uses status.displayValue e.g. "F", "Thru 14", "*3"
+      const thru = c.status?.displayValue || null;
+
       const normalizedName = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const safeKey = normalizedName.replace(/[^a-zA-Z0-9 _-]/g, '_');
-      players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name };
+      players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name, roundScore, thru, position };
     });
     console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed`);
     return { players, updated: new Date().toISOString() };
@@ -202,21 +220,53 @@ async function pollAllLiveSlugs() {
       const scoreUpdates = { lastUpdated: result.updated };
       Object.entries(result.players).forEach(([k,v]) => { scoreUpdates[`scores/${k}`] = v; });
       await fbUpdate(`golf/${slug}/live`, scoreUpdates);
-      console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players (${Object.keys(manualOverrides).length} manual overrides preserved)`);
+
+      // Append chart snapshot to Firebase so history survives page reloads
+      // Build owner team scores from current picks + new scores
+      const draftPicks = draftData?.picks || {};
+      const draftOwners = draftData?.owners || [];
+      const allSubs = Array.isArray(liveData?.subs) ? liveData.subs : Object.values(liveData?.subs || {});
+      const snapshotScores = {};
+      draftOwners.forEach(owner => {
+        const picks = draftPicks[owner] || { golfers: [], alternate: null };
+        const ownerSub = allSubs.find(s => s.owner === owner);
+        let golfers = picks.golfers.map(g => ({ ...g }));
+        if (ownerSub) {
+          golfers = golfers.filter(g => g.name !== ownerSub.from).concat([{ name: ownerSub.to }]);
+        }
+        const active = golfers.map(g => {
+          const normName = g.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9 _-]/g,'_');
+          const s = result.players[normName] || result.players[Object.keys(result.players).find(k => k.split(' ').pop().toLowerCase() === normName.split(' ').pop().toLowerCase())] || null;
+          return s && !s.cut ? s.score : null;
+        }).filter(s => s !== null).sort((a,b) => a - b);
+        snapshotScores[owner] = active.length >= 3 ? active.slice(0, 3).reduce((a,b) => a+b, 0) : null;
+      });
+      const snapshotKey = `snap_${Date.now()}`;
+      await fbSet(`golf/${slug}/live/scoreHistory/${snapshotKey}`, { ts: result.updated, scores: snapshotScores });
+      // Keep only last 100 snapshots to avoid unbounded growth
+      const historyNode = await fbGet(`golf/${slug}/live/scoreHistory`);
+      if (historyNode) {
+        const keys = Object.keys(historyNode).sort();
+        if (keys.length > 100) {
+          const toDelete = keys.slice(0, keys.length - 100);
+          for (const k of toDelete) await fbSet(`golf/${slug}/live/scoreHistory/${k}`, null);
+        }
+      }
+      console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players, snapshot written`);
     }
   } catch(e) {
     console.error('[poller] Error:', e.message);
   }
 }
 
-const POLL_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
 
 // Start polling and warm cache after Firebase connects
 setTimeout(async () => {
   await warmCache();
   await pollAllLiveSlugs();
   setInterval(pollAllLiveSlugs, POLL_INTERVAL_MS);
-  console.log(`[poller] Score poller started — interval: 30min`);
+  console.log(`[poller] Score poller started — interval: 15min`);
 }, 5000);
 
 // ── WebSocket ──────────────────────────────────────────────────────
