@@ -143,7 +143,24 @@ async function fetchGolfScores(eventId) {
     if (status !== 200) return { error: `ESPN returned ${status}` };
     const data = JSON.parse(body);
     const players = {};
-    const competitors = data?.events?.[0]?.competitions?.[0]?.competitors || [];
+    const competition = data?.events?.[0]?.competitions?.[0] || {};
+    const competitors = competition?.competitors || [];
+
+    // Round number — ESPN uses status.period (1-4) at the competition level
+    const currentRound = competition?.status?.period || null;
+
+    // Cut line — ESPN exposes this on the competition object
+    // Field names vary: cutLine, situation.cutLine, notes[type=cut]
+    let cutLine = null;
+    if (competition?.cutLine !== undefined) {
+      cutLine = competition.cutLine; // numeric score to par
+    } else if (competition?.situation?.cutLine !== undefined) {
+      cutLine = competition.situation.cutLine;
+    } else {
+      // Try notes array — some ESPN responses put cut info here
+      const cutNote = (competition?.notes || []).find(n => n.type === 'cut' || (n.headline||'').toLowerCase().includes('cut'));
+      if (cutNote) cutLine = cutNote.headline || cutNote.text || null;
+    }
     competitors.forEach(c => {
       const name = c.athlete?.displayName;
       if (!name) return;
@@ -184,8 +201,8 @@ async function fetchGolfScores(eventId) {
       const safeKey = normalizedName.replace(/[^a-zA-Z0-9 _-]/g, '_');
       players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name, roundScore, thru, teeTime, position };
     });
-    console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed`);
-    return { players, updated: new Date().toISOString() };
+    console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed, round ${currentRound}, cutLine ${cutLine}`);
+    return { players, updated: new Date().toISOString(), round: currentRound, cutLine };
   } catch(e) {
     console.error('[scores] fetch error:', e.message);
     return { error: e.message };
@@ -222,6 +239,15 @@ async function pollAllLiveSlugs() {
       // Write individual score keys to preserve override entries in Firebase
       const scoreUpdates = { lastUpdated: result.updated };
       Object.entries(result.players).forEach(([k,v]) => { scoreUpdates[`scores/${k}`] = v; });
+      // Auto-update round from ESPN if available
+      if (result.round && result.round !== liveData?.round) {
+        scoreUpdates['round'] = result.round;
+        console.log(`[poller] Auto-updated round to ${result.round} for ${slug}`);
+      }
+      // Write cut line if available
+      if (result.cutLine !== null && result.cutLine !== undefined) {
+        scoreUpdates['cutLine'] = result.cutLine;
+      }
       await fbUpdate(`golf/${slug}/live`, scoreUpdates);
 
       // Append chart snapshot to Firebase so history survives page reloads
