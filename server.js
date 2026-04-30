@@ -175,11 +175,14 @@ async function fetchGolfScores(eventId) {
       const position = c.status?.position?.displayName || c.status?.position?.abbreviation || null;
 
       // Thru / current hole — ESPN uses status.displayValue e.g. "F", "Thru 14", "*3"
+      // For players who haven't teed off, displayValue often contains the tee time e.g. "10:30 AM"
       const thru = c.status?.displayValue || null;
+      // Tee time — present when player hasn't started their round yet
+      const teeTime = c.status?.teeTime || null;
 
       const normalizedName = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const safeKey = normalizedName.replace(/[^a-zA-Z0-9 _-]/g, '_');
-      players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name, roundScore, thru, position };
+      players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name, roundScore, thru, teeTime, position };
     });
     console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed`);
     return { players, updated: new Date().toISOString() };
