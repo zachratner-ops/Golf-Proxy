@@ -28,7 +28,8 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,DELETE');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
 
@@ -507,6 +508,9 @@ app.post('/golf/:slug/scores/override-clear', async (req, res) => {
 
 app.post('/golf/:slug/eventid', async (req, res) => {
   const slug = req.params.slug;
+  const eventId = req.body.eventId;
+  getOrCreateDraft(slug).espnEventId = eventId;
+  await fbUpdate(`golf/${slug}/live`, { espnEventId: eventId });
   console.log(`[poller] Event ID set for ${slug} — triggering immediate fetch`);
   fetchGolfScores(eventId).then(result => {
     if (!result.error) {
