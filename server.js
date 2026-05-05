@@ -20,6 +20,77 @@ try {
 async function fbSet(path, val) { if (!fbDb) return; try { await fbDb.ref(path).set(val); } catch(e) { console.error('fbSet error:', e.message); } }
 async function fbUpdate(path, val) { if (!fbDb) return; try { await fbDb.ref(path).update(val); } catch(e) { console.error('fbUpdate error:', e.message); } }
 async function fbGet(path) { if (!fbDb) return null; try { const s = await fbDb.ref(path).once('value'); return s.val(); } catch(e) { console.error('fbGet error:', e.message); return null; } }
+
+// ── GroupMe bot ────────────────────────────────────────────────────
+const GOLF_GROUPME_BOT_ID = process.env.GOLF_GROUPME_BOT_ID || '5f4343df04ccbddee0be626d14';
+const GOLF_GROUPME_DRY_RUN = process.env.GOLF_GROUPME_DRY_RUN === 'true';
+
+async function postGolfGroupMe(text) {
+  if (GOLF_GROUPME_DRY_RUN || !GOLF_GROUPME_BOT_ID) {
+    console.log('[GroupMe DRY RUN] Would post:\n' + text);
+    return;
+  }
+  try {
+    const body = JSON.stringify({ bot_id: GOLF_GROUPME_BOT_ID, text });
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: 'api.groupme.com',
+        path: '/v3/bots/post',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+      }, r => { r.resume(); r.on('end', resolve); });
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+    console.log('[GroupMe] Post sent OK');
+  } catch(e) {
+    console.error('[GroupMe] Post failed:', e.message);
+  }
+}
+
+// ── Draft timer ────────────────────────────────────────────────────
+const draftTimers = {}; // slug -> { interval, warningsFired: Set }
+
+function startDraftTimer(slug) {
+  stopDraftTimer(slug);
+  const draft = drafts[slug];
+  if (!draft || draft.status !== 'drafting') return;
+  const warningsFired = new Set();
+  draftTimers[slug] = {
+    interval: setInterval(() => checkDraftTimer(slug, warningsFired), 10000),
+    warningsFired
+  };
+}
+
+function stopDraftTimer(slug) {
+  if (draftTimers[slug]) {
+    clearInterval(draftTimers[slug].interval);
+    delete draftTimers[slug];
+  }
+}
+
+function checkDraftTimer(slug, warningsFired) {
+  const draft = drafts[slug];
+  if (!draft || draft.status !== 'drafting' || !draft.timerStart) return;
+  const elapsed = (Date.now() - draft.timerStart) / 1000;
+  const remaining = (draft.timerDuration || 7200) - elapsed;
+  const seq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
+  const cur = seq?.[draft.currentPickIndex];
+  if (!cur) return;
+  const thresholds = [
+    { secs: 3600, key: '1hr', label: '1 hour'    },
+    { secs: 1800, key: '30m', label: '30 minutes' },
+    { secs: 120,  key: '2m',  label: '2 minutes'  },
+  ];
+  for (const t of thresholds) {
+    if (remaining <= t.secs && !warningsFired.has(t.key)) {
+      warningsFired.add(t.key);
+      postGolfGroupMe(`⏰ ${cur.owner} — ${t.label} left on the clock!\n🔗 gyou.in/golf-live.html?slug=${slug}`);
+    }
+  }
+  if (remaining <= 0) stopDraftTimer(slug);
+}
 async function syncDraft(slug, draft) { await fbSet(`golf/${slug}/draft`, { ...draft, undoStack: [], redoStack: [] }); }
 
 // ── Express ────────────────────────────────────────────────────────
@@ -82,6 +153,7 @@ async function rehydrateDraft(slug) {
     redoStack: [], // never persisted
   };
   console.log(`[rehydrate] Restored ${slug} (status: ${drafts[slug].status}, picks: ${Object.keys(drafts[slug].picks || {}).length} owners)`);
+  if (drafts[slug].status === 'drafting') startDraftTimer(slug);
   return drafts[slug];
 }
 
@@ -351,11 +423,15 @@ app.post('/golf/:slug/start', async (req, res) => {
   draft.timerStart = Date.now();
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
+  startDraftTimer(slug);
+  const firstOwner = draft.pickSequence?.[0]?.owner || '';
+  postGolfGroupMe(`🏌️ Draft started! ${draft.name || slug}\n${firstOwner} is on the clock first.\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
   res.json(draft);
 });
 
 app.post('/golf/:slug/reset', async (req, res) => {
   const slug = req.params.slug;
+  stopDraftTimer(slug);
   delete drafts[slug];
   const fresh = getOrCreateDraft(slug);
   broadcast(slug, { type: 'state', draft: fresh });
@@ -380,15 +456,17 @@ app.post('/golf/:slug/pick', async (req, res) => {
   draft.field = draft.field.filter(p => p.name !== golfer.name);
   const mainSeq = draft.pickSequence || [];
   const altSeq = draft.altSequence || [];
+  let pickNumber;
   if (draft.currentPhase === 'main') {
-    const pickNumber = draft.currentPickIndex + 1;
+    pickNumber = draft.currentPickIndex + 1;
     draft.picks[owner].golfers.push({ ...golfer, isAutopick: !!isAutopick, pickNumber });
   } else {
-    const pickNumber = mainSeq.length + draft.currentPickIndex + 1;
+    pickNumber = mainSeq.length + draft.currentPickIndex + 1;
     draft.picks[owner].alternate = { ...golfer, isAutopick: !!isAutopick, pickNumber };
   }
   draft.currentPickIndex++;
   const seq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
+  const isDraftComplete = draft.currentPickIndex >= seq.length && draft.currentPhase === 'alternate';
   if (draft.currentPickIndex >= seq.length) {
     if (draft.currentPhase === 'main') { draft.currentPhase = 'alternate'; draft.currentPickIndex = 0; }
     else { draft.status = 'complete'; draft.locked = true; }
@@ -396,6 +474,25 @@ app.post('/golf/:slug/pick', async (req, res) => {
   draft.timerStart = Date.now();
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
+
+  // GroupMe pick notification
+  const numOwners = draft.owners?.length || 1;
+  const roundNum = Math.ceil(pickNumber / numOwners);
+  const isAlt = pickNumber > mainSeq.length;
+  const roundLabel = isAlt ? 'Alt Round' : `Round ${roundNum}`;
+  const nextSeq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
+  const nextOwner = nextSeq?.[draft.currentPickIndex]?.owner;
+  const onClockLine = nextOwner ? `⏱ ${nextOwner} is on the clock` : '';
+  postGolfGroupMe(`🏌️ Pick ${pickNumber} (${roundLabel})\n${owner} → ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
+
+  // Reset timer warnings for new pick owner, or stop if draft complete
+  if (isDraftComplete) {
+    stopDraftTimer(slug);
+    postGolfGroupMe(`✅ Draft complete!\nAll picks are in. Good luck everyone 🏆\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
+  } else if (draftTimers[slug]) {
+    draftTimers[slug].warningsFired.clear();
+  }
+
   res.json(draft);
 });
 
