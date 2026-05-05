@@ -478,7 +478,7 @@ app.post('/golf/:slug/start', async (req, res) => {
   startDraftTimer(slug);
   const firstOwner = draft.pickSequence?.[0]?.owner || '';
   postDraftGroupMe(
-    `🏌️ Draft started! ${draft.name || slug}\n@${firstOwner} is on the clock first.\n🔗 gyou.in/golf-live.html?slug=${slug}`,
+    `🏌️ Draft started! ${draft.name || slug}\n\n@${firstOwner} is on the clock first.\n\n🔗 gyou.in/golf-live.html?slug=${slug}`,
     firstOwner ? [firstOwner] : []
   ).catch(()=>{});
   res.json(draft);
@@ -541,7 +541,7 @@ app.post('/golf/:slug/pick', async (req, res) => {
   const nextOwner = nextSeq?.[draft.currentPickIndex]?.owner;
   const onClockLine = nextOwner ? `⏱ @${nextOwner} is on the clock` : '';
   postDraftGroupMe(
-    `⛳ Pick ${pickNumber} (${roundLabel})\n🏌️ ${owner} → ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}\n🔗 gyou.in/golf-live.html?slug=${slug}`,
+    `⛳ Pick ${pickNumber} (${roundLabel})\n\n🏌️ ${owner} → ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}\n\n🔗 gyou.in/golf-live.html?slug=${slug}`,
     nextOwner ? [nextOwner] : []
   ).catch(()=>{});
 
