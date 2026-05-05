@@ -537,13 +537,16 @@ app.post('/golf/:slug/pick', async (req, res) => {
   const roundNum = Math.ceil(pickNumber / numOwners);
   const isAlt = pickNumber > mainSeq.length;
   const roundLabel = isAlt ? 'Alt Round' : `Round ${roundNum}`;
-  const nextSeq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
-  const nextOwner = nextSeq?.[draft.currentPickIndex]?.owner;
-  const onClockLine = nextOwner ? `⏱ @${nextOwner} you're on the clock` : '';
-  postDraftGroupMe(
-    `⛳ Pick ${pickNumber} — ${roundLabel}\n\n🏌️ ${owner} takes ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}`,
-    nextOwner ? [nextOwner] : []
-  ).catch(()=>{});
+  // GroupMe pick notification — skip for autopicks (placeholder assigns handle their own message)
+  if (!isAutopick) {
+    const nextSeq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
+    const nextOwner = nextSeq?.[draft.currentPickIndex]?.owner;
+    const onClockLine = nextOwner ? `⏱ @${nextOwner} you're on the clock` : '';
+    postDraftGroupMe(
+      `⛳ Pick ${pickNumber} — ${roundLabel}\n\n🏌️ ${owner} takes ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}`,
+      nextOwner ? [nextOwner] : []
+    ).catch(()=>{});
+  }
 
   // Reset timer warnings for new pick owner, or stop if draft complete
   if (isDraftComplete) {
@@ -617,8 +620,10 @@ app.post('/golf/:slug/makeup-set', async (req, res) => {
   const roundLabel = isAlt ? 'Alt Round' : `Round ${roundNum}`;
   const nextOwner = curSeq?.[draft.currentPickIndex]?.owner;
   const onClockLine = nextOwner ? `⏱ @${nextOwner} you're on the clock` : '';
+  // Get the placeholder name just assigned (last golfer added to owner's picks)
+  const placeholderGolfer = draft.picks[owner]?.golfers?.[slotIndex]?.name || 'a placeholder';
   postDraftGroupMe(
-    `⛳ Pick ${pickNumber} — ${roundLabel}\n\n🏌️ ${owner} assigned a placeholder${onClockLine ? '\n' + onClockLine : ''}`,
+    `⛳ Pick ${pickNumber} — ${roundLabel}\n\n🏌️ ${owner} assigned a placeholder: ${placeholderGolfer}${onClockLine ? '\n' + onClockLine : ''}`,
     nextOwner ? [nextOwner] : []
   ).catch(()=>{});
 
