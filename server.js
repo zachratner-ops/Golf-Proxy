@@ -164,7 +164,7 @@ async function warmCache() {
   try {
     const golfNode = await fbGet('golf');
     if (!golfNode) return;
-    const slugs = Object.keys(golfNode).filter(k => k !== 'history');
+    const slugs = Object.keys(golfNode).filter(k => k !== 'history' && /^[a-zA-Z0-9_-]+$/.test(k));
     let warmed = 0;
     for (const slug of slugs) {
       const status = golfNode[slug]?.draft?.status;
@@ -292,7 +292,7 @@ async function pollAllLiveSlugs() {
   try {
     const golfNode = await fbGet('golf');
     if (!golfNode) return;
-    const slugs = Object.keys(golfNode).filter(k => k !== 'history');
+    const slugs = Object.keys(golfNode).filter(k => k !== 'history' && /^[a-zA-Z0-9_-]+$/.test(k));
     for (const slug of slugs) {
       const liveData = golfNode[slug]?.live;
       const draftData = golfNode[slug]?.draft;
@@ -385,6 +385,8 @@ app.get('/health', (req, res) => res.json({ ok: true, service: 'golf', firebase:
 app.get('/golf/:slug', async (req, res) => {
   if (req.params.slug === 'history') return res.json({});
   const slug = req.params.slug;
+  // Guard against malformed slugs
+  if (!/^[a-zA-Z0-9_-]+$/.test(slug)) return res.status(400).json({ error: 'Invalid slug' });
   if (!drafts[slug]) await rehydrateDraft(slug);
   res.json(getOrCreateDraft(slug));
 });
@@ -778,10 +780,10 @@ app.post('/golf/:slug/odds', async (req, res) => {
   draft.field = draft.field.map(p => {
     const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
     const exact = safeOdds[safeKey];
-    if (exact) { matched.push(p.name); return {...p, odds_dk:exact.dk, odds_top10:exact.dk_top10, odds_cut:exact.dk_cut}; }
+    if (exact) { matched.push(p.name); const o={...p, odds_dk:exact.dk}; if(exact.dk_top10) o.odds_top10=exact.dk_top10; if(exact.dk_cut) o.odds_cut=exact.dk_cut; return o; }
     const lastName = p.name.split(' ').pop().toLowerCase();
     const matchKey = Object.keys(safeOdds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
-    if (matchKey) { matched.push(p.name); return {...p, odds_dk:safeOdds[matchKey].dk, odds_top10:safeOdds[matchKey].dk_top10, odds_cut:safeOdds[matchKey].dk_cut}; }
+    if (matchKey) { matched.push(p.name); const o={...p, odds_dk:safeOdds[matchKey].dk}; if(safeOdds[matchKey].dk_top10) o.odds_top10=safeOdds[matchKey].dk_top10; if(safeOdds[matchKey].dk_cut) o.odds_cut=safeOdds[matchKey].dk_cut; return o; }
     unmatched.push({ name: p.name });
     return p;
   });
