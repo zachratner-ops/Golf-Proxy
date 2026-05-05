@@ -25,7 +25,7 @@ async function fbGet(path) { if (!fbDb) return null; try { const s = await fbDb.
 const GOLF_GROUPME_BOT_ID = process.env.GOLF_GROUPME_BOT_ID || '5f4343df04ccbddee0be626d14';
 const GOLF_GROUPME_DRY_RUN = process.env.GOLF_GROUPME_DRY_RUN === 'true';
 
-async function postGolfGroupMe(text) {
+async function postDraftGroupMe(text) {
   if (GOLF_GROUPME_DRY_RUN || !GOLF_GROUPME_BOT_ID) {
     console.log('[GroupMe DRY RUN] Would post:\n' + text);
     return;
@@ -86,7 +86,7 @@ function checkDraftTimer(slug, warningsFired) {
   for (const t of thresholds) {
     if (remaining <= t.secs && !warningsFired.has(t.key)) {
       warningsFired.add(t.key);
-      postGolfGroupMe(`⏰ ${cur.owner} — ${t.label} left on the clock!\n🔗 gyou.in/golf-live.html?slug=${slug}`);
+      postDraftGroupMe(`⏰ ${cur.owner} — ${t.label} left on the clock!\n🔗 gyou.in/golf-live.html?slug=${slug}`);
     }
   }
   if (remaining <= 0) stopDraftTimer(slug);
@@ -438,7 +438,7 @@ app.post('/golf/:slug/start', async (req, res) => {
   await syncDraft(slug, draft);
   startDraftTimer(slug);
   const firstOwner = draft.pickSequence?.[0]?.owner || '';
-  postGolfGroupMe(`🏌️ Draft started! ${draft.name || slug}\n${firstOwner} is on the clock first.\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
+  postDraftGroupMe(`🏌️ Draft started! ${draft.name || slug}\n${firstOwner} is on the clock first.\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
   res.json(draft);
 });
 
@@ -498,12 +498,12 @@ app.post('/golf/:slug/pick', async (req, res) => {
   const nextSeq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
   const nextOwner = nextSeq?.[draft.currentPickIndex]?.owner;
   const onClockLine = nextOwner ? `⏱ ${nextOwner} is on the clock` : '';
-  postGolfGroupMe(`🏌️ Pick ${pickNumber} (${roundLabel})\n${owner} → ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
+  postDraftGroupMe(`🏌️ Pick ${pickNumber} (${roundLabel})\n${owner} → ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
 
   // Reset timer warnings for new pick owner, or stop if draft complete
   if (isDraftComplete) {
     stopDraftTimer(slug);
-    postGolfGroupMe(`✅ Draft complete!\nAll picks are in. Good luck everyone 🏆\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
+    postDraftGroupMe(`✅ Draft complete!\nAll picks are in. Good luck everyone 🏆\n🔗 gyou.in/golf-live.html?slug=${slug}`).catch(()=>{});
   } else if (draftTimers[slug]) {
     draftTimers[slug].warningsFired.clear();
   }
