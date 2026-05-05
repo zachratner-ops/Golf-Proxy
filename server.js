@@ -604,6 +604,24 @@ app.post('/golf/:slug/makeup-set', async (req, res) => {
   draft.makeupPicks[owner] = slotIndex;
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
+
+  // GroupMe — placeholder assigned, next owner on the clock
+  const mainSeq = draft.pickSequence || [];
+  const curSeq = draft.currentPhase === 'main' ? mainSeq : draft.altSequence || [];
+  const pickNumber = draft.currentPhase === 'main'
+    ? draft.currentPickIndex
+    : mainSeq.length + draft.currentPickIndex;
+  const numOwners = draft.owners?.length || 1;
+  const roundNum = Math.ceil(pickNumber / numOwners);
+  const isAlt = draft.currentPhase === 'alternate';
+  const roundLabel = isAlt ? 'Alt Round' : `Round ${roundNum}`;
+  const nextOwner = curSeq?.[draft.currentPickIndex]?.owner;
+  const onClockLine = nextOwner ? `⏱ @${nextOwner} you're on the clock` : '';
+  postDraftGroupMe(
+    `⛳ Pick ${pickNumber} — ${roundLabel}\n\n🏌️ ${owner} assigned a placeholder${onClockLine ? '\n' + onClockLine : ''}`,
+    nextOwner ? [nextOwner] : []
+  ).catch(()=>{});
+
   res.json(draft);
 });
 
@@ -614,16 +632,17 @@ app.post('/golf/:slug/makeup-clear', async (req, res) => {
   if (!draft.makeupPicks) draft.makeupPicks = {};
   const slotIndex = draft.makeupPicks[owner];
   if (slotIndex !== undefined && slotIndex !== null) {
-    // Replace placeholder in picks with real pick
     draft.picks[owner].golfers[slotIndex] = { name: realPickName };
-    // Remove real pick from field
     draft.field = draft.field.filter(p => p.name !== realPickName);
-    // Add placeholder back to field
     if (placeholderName) draft.field.push({ name: placeholderName });
     delete draft.makeupPicks[owner];
   }
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
+
+  // GroupMe — real pick made
+  postDraftGroupMe(`🏌️ ${owner} makes their pick: ${realPickName} replacing ${placeholderName || 'placeholder'}`).catch(()=>{});
+
   res.json(draft);
 });
 
