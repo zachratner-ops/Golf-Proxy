@@ -539,9 +539,9 @@ app.post('/golf/:slug/pick', async (req, res) => {
   const roundLabel = isAlt ? 'Alt Round' : `Round ${roundNum}`;
   const nextSeq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
   const nextOwner = nextSeq?.[draft.currentPickIndex]?.owner;
-  const onClockLine = nextOwner ? `⏱ @${nextOwner} is on the clock` : '';
+  const onClockLine = nextOwner ? `⏱ @${nextOwner} you're on the clock` : '';
   postDraftGroupMe(
-    `⛳ Pick ${pickNumber} (${roundLabel})\n\n🏌️ ${owner} → ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}\n\n🔗 gyou.in/golf-live.html?slug=${slug}`,
+    `⛳ Pick ${pickNumber} — ${roundLabel}\n\n🏌️ ${owner} takes ${golfer.name}${onClockLine ? '\n' + onClockLine : ''}`,
     nextOwner ? [nextOwner] : []
   ).catch(()=>{});
 
