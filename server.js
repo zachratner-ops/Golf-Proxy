@@ -121,6 +121,10 @@ const drafts = {};
 const OWNERS = ['Mark','Marc','Jared','Andrew','Zach','Ben','Matt'];
 
 function getOrCreateDraft(slug) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
+    console.error(`[getOrCreateDraft] Invalid slug rejected: "${slug.substring(0,30)}..."`);
+    slug = 'invalid';
+  }
   if (!drafts[slug]) {
     drafts[slug] = {
       slug, name: '', status: 'setup',
@@ -143,18 +147,25 @@ function getOrCreateDraft(slug) {
 
 // Rehydrate a single slug from Firebase into memory
 async function rehydrateDraft(slug) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(slug)) return null;
   const saved = await fbGet(`golf/${slug}/draft`);
   if (!saved || !saved.status || saved.status === 'setup') return null;
-  // Restore full draft state — merge over blank to ensure all keys exist
   drafts[slug] = {
-    ...getOrCreateDraft(slug), // defaults
+    ...getOrCreateDraft(slug),
     ...saved,
-    undoStack: [], // never persisted
-    redoStack: [], // never persisted
+    undoStack: [],
+    redoStack: [],
   };
-  console.log(`[rehydrate] Restored ${slug} (status: ${drafts[slug].status}, picks: ${Object.keys(drafts[slug].picks || {}).length} owners)`);
-  if (drafts[slug].status === 'drafting') startDraftTimer(slug);
-  return drafts[slug];
+  // Ensure every owner in the draft has a picks entry
+  const d = drafts[slug];
+  if (d.owners && d.picks) {
+    d.owners.forEach(o => {
+      if (!d.picks[o]) d.picks[o] = { golfers: [], alternate: null };
+    });
+  }
+  console.log(`[rehydrate] Restored ${slug} (status: ${d.status}, picks: ${Object.keys(d.picks || {}).length} owners)`);
+  if (d.status === 'drafting') startDraftTimer(slug);
+  return d;
 }
 
 // On startup, warm all active slugs from Firebase so a container restart
@@ -456,6 +467,8 @@ app.post('/golf/:slug/pick', async (req, res) => {
   });
   draft.redoStack = [];
   draft.field = draft.field.filter(p => p.name !== golfer.name);
+  // Ensure owner has a picks entry (defensive — should always exist)
+  if (!draft.picks[owner]) draft.picks[owner] = { golfers: [], alternate: null };
   const mainSeq = draft.pickSequence || [];
   const altSeq = draft.altSequence || [];
   let pickNumber;
@@ -1007,7 +1020,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 wss.on('connection', (ws, req) => {
   const slug = new URL(req.url, 'http://localhost').searchParams.get('slug');
-  if (!slug) return ws.close();
+  if (!slug || !/^[a-zA-Z0-9_-]+$/.test(slug)) return ws.close();
   if (!clients[slug]) clients[slug] = new Set();
   clients[slug].add(ws);
   ws.send(JSON.stringify({ type: 'state', draft: getOrCreateDraft(slug) }));
