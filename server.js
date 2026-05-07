@@ -1339,6 +1339,102 @@ app.get('/golf/diag/books6', async (req, res) => {
   res.json(report);
 });
 
+// ── BetMGM CDS API golf probe ─────────────────────────────────────────────────
+// Uses the real access ID found from the browser network tab
+// Hit: GET /golf/diag/books7
+//
+app.get('/golf/diag/books7', async (req, res) => {
+  function tryParse(body) { try { return JSON.parse(body); } catch(e) { return null; } }
+  function snip(body, len) { return (body || '').slice(0, len || 1000); }
+  async function safeGzip(host, path, headers) {
+    try { return await httpsGetGzip(host, path, headers || {}); }
+    catch(e) { return { status: null, body: '', error: e.message, headers: {} }; }
+  }
+  const ACCESS_ID = 'ZjVlNTEzYzAtMGUwNC00YTk1LTg4OGYtZDQ4ZGNhOWY4Mjc1';
+  const HOST = 'www.ny.betmgm.com';
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  const H = {
+    'User-Agent': UA,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Origin': 'https://www.ny.betmgm.com',
+    'Referer': 'https://www.ny.betmgm.com/en/sports/golf-4',
+  };
+  const BASE = `x-bwin-accessid=${ACCESS_ID}&lang=en-us&country=US&usercountry=US`;
+  const report = {};
+
+  // Step 1: Hit the exact URL we saw in the browser — grid view all
+  {
+    const r = await safeGzip(HOST, `/cds-api/offer-grouping/grid-view/all?${BASE}`, H);
+    const parsed = tryParse(r.body);
+    report.grid_view_all = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      isJson: !!parsed,
+      topKeys: parsed ? Object.keys(parsed) : null,
+      snippet: snip(r.body),
+    };
+  }
+
+  // Step 2: Try golf-specific grid view
+  {
+    const r = await safeGzip(HOST, `/cds-api/offer-grouping/grid-view/golf?${BASE}`, H);
+    const parsed = tryParse(r.body);
+    report.grid_view_golf = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      isJson: !!parsed,
+      topKeys: parsed ? Object.keys(parsed) : null,
+      snippet: snip(r.body),
+    };
+  }
+
+  // Step 3: Try the bettingoffer/fixtures endpoint with golf sport ID
+  // Golf sport ID on Entain/bwin platforms is typically 4
+  const fixturePaths = [
+    `/cds-api/bettingoffer/fixtures?${BASE}&fixtureTypes=Standard&state=Latest&offerMapping=Outrights&sportIds=4&skip=0&take=50&sortBy=Tags`,
+    `/cds-api/bettingoffer/fixtures?${BASE}&fixtureTypes=Outrights&sportIds=4&skip=0&take=50`,
+    `/cds-api/bettingoffer/fixtures?${BASE}&offerMapping=Outrights&sportIds=4&skip=0&take=50`,
+    `/cds-api/bettingoffer/category-tree?${BASE}&sportIds=4`,
+    `/cds-api/bettingoffer/sports?${BASE}`,
+  ];
+  for (const path of fixturePaths) {
+    const label = path.split('?')[0].split('/').pop() + '_' + path.includes('Outrights');
+    const r = await safeGzip(HOST, path, H);
+    const parsed = tryParse(r.body);
+    // If we got data, extract useful info
+    let fixtures = null;
+    let marketTypes = null;
+    if (parsed) {
+      fixtures = parsed.fixtures?.slice(0,3).map(f => ({
+        id: f.id,
+        name: f.name?.value,
+        startDate: f.startDate,
+        markets: f.markets?.slice(0,5).map(m => ({
+          name: m.name?.value,
+          type: m.marketType,
+          options: m.options?.slice(0,3).map(o => ({ name: o.name?.value, price: o.price?.odds, usOdds: o.price?.usOdds }))
+        }))
+      }));
+      // Also look for top-level market type info
+      marketTypes = parsed.marketTypes || parsed.offerCategories || null;
+    }
+    report[label] = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      isJson: !!parsed,
+      topKeys: parsed ? Object.keys(parsed) : null,
+      fixtureCount: parsed?.fixtures?.length ?? parsed?.count ?? null,
+      fixtures,
+      marketTypes: marketTypes ? JSON.stringify(marketTypes).slice(0,300) : null,
+      snippet: snip(r.body, 600),
+    };
+  }
+
+  res.json(report);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
