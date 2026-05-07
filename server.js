@@ -760,6 +760,105 @@ app.get('/golf/diag/espn', async (req, res) => {
   res.json(results);
 });
 
+// ── DraftKings Golf Odds Diagnostic ───────────────────────────────────────────
+// Temporary route — probes DK's internal sportsbook API to see what golf
+// markets (outrights, top10, make cut) are actually available and how they're
+// structured. Remove once we know what works.
+//
+// Hit: GET /golf/diag/dk
+// Optionally: GET /golf/diag/dk?eventGroupId=11106758
+//
+app.get('/golf/diag/dk', async (req, res) => {
+  const DK_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Referer': 'https://sportsbook.draftkings.com/sports/golf',
+  };
+
+  function tryParse(body) {
+    try { return JSON.parse(body); } catch(e) { return null; }
+  }
+
+  const report = {};
+
+  // ── Step 1: Discover golf event groups ──────────────────────────────────────
+  // DK sportsbook API root for golf — returns eventGroups with subcategories
+  const slugsToTry = ['golf', 'pga-tour', 'golf-pga-tour'];
+  let eventGroups = null;
+  for (const slug of slugsToTry) {
+    const r = await httpsGet('sportsbook.draftkings.com', `/sites/US-SB/api/v5/eventgroups/${slug}?format=json`, DK_HEADERS);
+    const parsed = tryParse(r.body);
+    report[`eventgroup_slug_${slug}`] = { status: r.status, topKeys: parsed ? Object.keys(parsed) : null, raw: r.body.slice(0, 600) };
+    if (r.status === 200 && parsed) { eventGroups = parsed; break; }
+  }
+
+  // ── Step 2: Try known numeric event group IDs for PGA Tour golf ─────────────
+  // These are reverse-engineered from the DK sportsbook URL structure
+  const groupIdsToTry = req.query.eventGroupId
+    ? [req.query.eventGroupId]
+    : ['11106758', '11571', '9', '1'];
+
+  let foundGroupId = null;
+  let foundCategories = null;
+  for (const gid of groupIdsToTry) {
+    const r = await httpsGet('sportsbook.draftkings.com', `/sites/US-SB/api/v5/eventgroups/${gid}?format=json`, DK_HEADERS);
+    const parsed = tryParse(r.body);
+    const categories = parsed?.eventGroup?.offerCategories || parsed?.offerCategories || null;
+    const name = parsed?.eventGroup?.name || parsed?.name || null;
+    report[`eventgroup_id_${gid}`] = {
+      status: r.status,
+      name,
+      categoryCount: categories?.length ?? null,
+      categoryNames: categories?.map(c => `${c.offerCategoryId}:${c.name}`) ?? null,
+      raw: r.body.slice(0, 800),
+    };
+    if (r.status === 200 && parsed && name?.toLowerCase().includes('golf') || name?.toLowerCase().includes('pga')) {
+      foundGroupId = gid;
+      foundCategories = categories;
+    }
+  }
+
+  // ── Step 3: If we found a group, dig into its offer categories ──────────────
+  // Categories are things like "Outright Winner", "Top 10", "Make the Cut"
+  if (foundGroupId && foundCategories) {
+    report.foundGroup = { id: foundGroupId, categories: foundCategories?.map(c => ({ id: c.offerCategoryId, name: c.name })) };
+
+    // Fetch the first few categories to see what markets/players are inside
+    for (const cat of (foundCategories || []).slice(0, 6)) {
+      const catPath = `/sites/US-SB/api/v5/eventgroups/${foundGroupId}/categories/${cat.offerCategoryId}?format=json`;
+      const r = await httpsGet('sportsbook.draftkings.com', catPath, DK_HEADERS);
+      const parsed = tryParse(r.body);
+      // Extract offer/player names from the response
+      let samplePlayers = [];
+      try {
+        const offers = parsed?.eventGroup?.offerCategories?.[0]?.offerSubcategoryDescriptors?.[0]?.offerSubcategory?.offers || [];
+        samplePlayers = offers.slice(0, 5).map(o => ({
+          label: o[0]?.label,
+          outcomes: o[0]?.outcomes?.slice(0,3).map(out => ({ label: out.label, odds: out.oddsAmerican }))
+        }));
+      } catch(e) {}
+      report[`category_${cat.offerCategoryId}_${cat.name?.replace(/\s+/g,'_')}`] = {
+        status: r.status,
+        samplePlayers,
+        raw: r.body.slice(0, 800),
+      };
+    }
+  }
+
+  // ── Step 4: Try the events endpoint to find the current tournament ───────────
+  const eventsPath = `/sites/US-SB/api/v5/eventgroups/${foundGroupId || '11106758'}/events?format=json`;
+  const evR = await httpsGet('sportsbook.draftkings.com', eventsPath, DK_HEADERS);
+  const evParsed = tryParse(evR.body);
+  report.events = {
+    status: evR.status,
+    eventCount: evParsed?.events?.length ?? null,
+    eventNames: evParsed?.events?.slice(0,5).map(e => ({ id: e.eventId, name: e.name, start: e.startDate })) ?? null,
+    raw: evR.body.slice(0, 600),
+  };
+
+  res.json(report);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
