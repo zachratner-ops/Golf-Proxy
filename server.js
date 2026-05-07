@@ -945,6 +945,99 @@ app.get('/golf/diag/books2', async (req, res) => {
   res.json(report);
 });
 
+// ── BetMGM deep probe ─────────────────────────────────────────────────────────
+// Hit: GET /golf/diag/books3
+//
+app.get('/golf/diag/books3', async (req, res) => {
+  function tryParse(body) { try { return JSON.parse(body); } catch(e) { return null; } }
+  function snip(body, len) { return (body || '').slice(0, len || 800); }
+  async function safeGet(host, path, headers) {
+    try { return await httpsGet(host, path, headers || {}); }
+    catch(e) { return { status: null, body: '', error: e.message }; }
+  }
+  const report = {};
+
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+  // Full browser-like headers — BetMGM may require Referer + Accept-Encoding
+  const FULL_H = {
+    'User-Agent': UA,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Referer': 'https://sports.betmgm.com/en/sports/golf-4',
+    'Origin': 'https://sports.betmgm.com',
+    'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"macOS"',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'x-requested-with': 'XMLHttpRequest',
+  };
+
+  // BetMGM uses Entain backend. Known working URL patterns:
+  const paths = [
+    '/en/sports/api/sportsdata/outrightgroups?sportId=4&lang=en-us',
+    '/en/sports/api/sportsdata/outrightgroups?sportId=golf&lang=en-us',
+    '/en/sports/api/sportsdata/outrights?categoryId=4&lang=en-us',
+    '/en/sports/api/sportsdata/competitions?sportId=4&lang=en-us',
+    '/en/sports/api/sportsdata/sports?lang=en-us',
+    '/en/sports/api/sportsdata/outrightevents?sportId=4&lang=en-us',
+    '/en/sports/golf-4/outrights',
+    '/en/sports/api/outrights/golf?lang=en-us',
+    // Try their widget/feed API
+    '/api/sportsbook/v3/sports/4/competitions?jurisdiction=NJ&lang=en-us',
+    '/api/sportsbook/v3/sports/4/outrights?jurisdiction=NJ&lang=en-us',
+  ];
+
+  for (const path of paths) {
+    const r = await safeGet('sports.betmgm.com', path, FULL_H);
+    const key = path.split('/').filter(Boolean).slice(-1)[0].split('?')[0];
+    report['mgm_' + key] = {
+      status: r.status,
+      error: r.error,
+      bodyLen: (r.body || '').length,
+      contentType: null, // httpsGet doesn't expose headers — noted
+      snippet: snip(r.body, 400),
+    };
+  }
+
+  // Also try BetMGM NJ specifically (sometimes different domain serves data)
+  {
+    const r = await safeGet('nj.betmgm.com', '/en/sports/api/sportsdata/outrightgroups?sportId=4&lang=en-us', FULL_H);
+    report.mgm_nj_outrightgroups = { status: r.status, error: r.error, bodyLen: (r.body||'').length, snippet: snip(r.body) };
+  }
+
+  // Try their CDN / static API endpoints
+  {
+    const r = await safeGet('cds-api.betmgm.com', '/bettingoffer/fixtures?x-bwin-accessid=NmFjNTMxODMtZWZkNi00MDFjLWI4ZDctZmU3YmFlMTcwMTE4&lang=en-us&country=US&userCountry=US&subdivision=US-NJ&offerMapping=Outrights&sportIds=4&regionIds=9&competitionIds=&fixtureTypes=Standard&state=Latest&skip=0&take=20&sortBy=Tags', FULL_H);
+    const parsed = tryParse(r.body);
+    report.mgm_cds_outrights = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      isJson: !!parsed,
+      eventCount: parsed && parsed.fixtures ? parsed.fixtures.length : null,
+      snippet: snip(r.body),
+    };
+  }
+
+  // The accessId above is BetMGM's known public CDS key — also try golf specifically
+  {
+    const r = await safeGet('cds-api.betmgm.com', '/bettingoffer/fixtures?x-bwin-accessid=NmFjNTMxODMtZWZkNi00MDFjLWI4ZDctZmU3YmFlMTcwMTE4&lang=en-us&country=US&userCountry=US&offerMapping=Outrights&sportIds=4&take=50', FULL_H);
+    const parsed = tryParse(r.body);
+    report.mgm_cds_golf_outrights = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      isJson: !!parsed,
+      topKeys: parsed ? Object.keys(parsed) : null,
+      snippet: snip(r.body),
+    };
+  }
+
+  res.json(report);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
