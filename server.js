@@ -760,104 +760,110 @@ app.get('/golf/diag/espn', async (req, res) => {
   res.json(results);
 });
 
-// ── DraftKings Golf Odds Diagnostic ───────────────────────────────────────────
-// Temporary route — probes DK's internal sportsbook API to see what golf
-// markets (outrights, top10, make cut) are actually available and how they're
-// structured. Remove once we know what works.
+// ── Multi-Sportsbook Golf Odds Diagnostic ─────────────────────────────────────
+// Probes multiple sportsbooks' internal APIs to find one reachable from Railway
+// that exposes golf top10 + make cut markets.
+// Hit: GET /golf/diag/books
 //
-// Hit: GET /golf/diag/dk
-// Optionally: GET /golf/diag/dk?eventGroupId=11106758
-//
-app.get('/golf/diag/dk', async (req, res) => {
-  const DK_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'application/json',
-    'Referer': 'https://sportsbook.draftkings.com/sports/golf',
-  };
-
+app.get('/golf/diag/books', async (req, res) => {
   function tryParse(body) {
     try { return JSON.parse(body); } catch(e) { return null; }
   }
-
+  function snippet(body, len) { return (body || '').slice(0, len || 500); }
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
   const report = {};
 
-  // ── Step 1: Discover golf event groups ──────────────────────────────────────
-  // DK sportsbook API root for golf — returns eventGroups with subcategories
-  const slugsToTry = ['golf', 'pga-tour', 'golf-pga-tour'];
-  let eventGroups = null;
-  for (const slug of slugsToTry) {
-    const r = await httpsGet('sportsbook.draftkings.com', `/sites/US-SB/api/v5/eventgroups/${slug}?format=json`, DK_HEADERS);
+  // 1. DraftKings (expected 403 — confirming)
+  {
+    const r = await httpsGet('sportsbook.draftkings.com',
+      '/sites/US-SB/api/v5/eventgroups/11106758?format=json',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
+    report.draftkings = { status: r.status, snippet: snippet(r.body) };
+  }
+
+  // 2. FanDuel — competition list
+  {
+    const r = await httpsGet('sbapi.fanduel.com',
+      '/getcompetitions?_ak=FhMFpcPWXMeyZxOx&betexRegion=GBR&capiJurisdiction=intl&currencyCode=USD&exchangeLocale=en_US&includePrices=true&language=en&priceHistory=1&regionCode=INTL&_=1',
+      { 'User-Agent': UA, 'Accept': 'application/json', 'Origin': 'https://www.fanduel.com' });
     const parsed = tryParse(r.body);
-    report[`eventgroup_slug_${slug}`] = { status: r.status, topKeys: parsed ? Object.keys(parsed) : null, raw: r.body.slice(0, 600) };
-    if (r.status === 200 && parsed) { eventGroups = parsed; break; }
+    const golfComps = parsed && parsed.competitions ? parsed.competitions.filter(function(c) { return c.name && (c.name.toLowerCase().indexOf('golf') > -1 || c.name.toLowerCase().indexOf('pga') > -1); }) : null;
+    report.fanduel_competitions = { status: r.status, golfComps: golfComps ? golfComps.slice(0,5) : null, snippet: snippet(r.body) };
   }
 
-  // ── Step 2: Try known numeric event group IDs for PGA Tour golf ─────────────
-  // These are reverse-engineered from the DK sportsbook URL structure
-  const groupIdsToTry = req.query.eventGroupId
-    ? [req.query.eventGroupId]
-    : ['11106758', '11571', '9', '1'];
+  // 3. FanDuel US sportsbook alternate
+  {
+    const r = await httpsGet('api.fanduel.com',
+      '/sports/golf?_ak=FhMFpcPWXMeyZxOx',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
+    report.fanduel_us = { status: r.status, snippet: snippet(r.body) };
+  }
 
-  let foundGroupId = null;
-  let foundCategories = null;
-  for (const gid of groupIdsToTry) {
-    const r = await httpsGet('sportsbook.draftkings.com', `/sites/US-SB/api/v5/eventgroups/${gid}?format=json`, DK_HEADERS);
+  // 4. BetMGM / Entain
+  {
+    const r = await httpsGet('sports.betmgm.com',
+      '/en/sports/api/sportsdata/competition/golf/outright-matches?lang=en-us',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
     const parsed = tryParse(r.body);
-    const categories = parsed?.eventGroup?.offerCategories || parsed?.offerCategories || null;
-    const name = parsed?.eventGroup?.name || parsed?.name || null;
-    report[`eventgroup_id_${gid}`] = {
-      status: r.status,
-      name,
-      categoryCount: categories?.length ?? null,
-      categoryNames: categories?.map(c => `${c.offerCategoryId}:${c.name}`) ?? null,
-      raw: r.body.slice(0, 800),
-    };
-    if (r.status === 200 && parsed && name?.toLowerCase().includes('golf') || name?.toLowerCase().includes('pga')) {
-      foundGroupId = gid;
-      foundCategories = categories;
-    }
+    report.betmgm = { status: r.status, eventCount: parsed && Array.isArray(parsed) ? parsed.length : null, snippet: snippet(r.body) };
   }
 
-  // ── Step 3: If we found a group, dig into its offer categories ──────────────
-  // Categories are things like "Outright Winner", "Top 10", "Make the Cut"
-  if (foundGroupId && foundCategories) {
-    report.foundGroup = { id: foundGroupId, categories: foundCategories?.map(c => ({ id: c.offerCategoryId, name: c.name })) };
-
-    // Fetch the first few categories to see what markets/players are inside
-    for (const cat of (foundCategories || []).slice(0, 6)) {
-      const catPath = `/sites/US-SB/api/v5/eventgroups/${foundGroupId}/categories/${cat.offerCategoryId}?format=json`;
-      const r = await httpsGet('sportsbook.draftkings.com', catPath, DK_HEADERS);
-      const parsed = tryParse(r.body);
-      // Extract offer/player names from the response
-      let samplePlayers = [];
-      try {
-        const offers = parsed?.eventGroup?.offerCategories?.[0]?.offerSubcategoryDescriptors?.[0]?.offerSubcategory?.offers || [];
-        samplePlayers = offers.slice(0, 5).map(o => ({
-          label: o[0]?.label,
-          outcomes: o[0]?.outcomes?.slice(0,3).map(out => ({ label: out.label, odds: out.oddsAmerican }))
-        }));
-      } catch(e) {}
-      report[`category_${cat.offerCategoryId}_${cat.name?.replace(/\s+/g,'_')}`] = {
-        status: r.status,
-        samplePlayers,
-        raw: r.body.slice(0, 800),
-      };
-    }
+  // 5. Caesars
+  {
+    const r = await httpsGet('api.caesars.com',
+      '/sportsbook-feeds/v2/sports/GOLF/competitions?locale=en-US&max=20',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
+    report.caesars = { status: r.status, snippet: snippet(r.body) };
   }
 
-  // ── Step 4: Try the events endpoint to find the current tournament ───────────
-  const eventsPath = `/sites/US-SB/api/v5/eventgroups/${foundGroupId || '11106758'}/events?format=json`;
-  const evR = await httpsGet('sportsbook.draftkings.com', eventsPath, DK_HEADERS);
-  const evParsed = tryParse(evR.body);
-  report.events = {
-    status: evR.status,
-    eventCount: evParsed?.events?.length ?? null,
-    eventNames: evParsed?.events?.slice(0,5).map(e => ({ id: e.eventId, name: e.name, start: e.startDate })) ?? null,
-    raw: evR.body.slice(0, 600),
-  };
+  // 6. Pinnacle — well-known open API, golf sport id=10
+  {
+    const r = await httpsGet('guest.api.arcadia.pinnacle.com',
+      '/v2/leagues?sportId=10&brandId=0',
+      { 'User-Agent': UA, 'Accept': 'application/json', 'X-API-Key': 'CmX2KcMrXuFmNg6YFbmTxE0y9CblvR6LqCWhx0NC' });
+    const parsed = tryParse(r.body);
+    report.pinnacle_leagues = { status: r.status, leagues: parsed && parsed.leagues ? parsed.leagues.slice(0,8).map(function(l) { return { id: l.id, name: l.name }; }) : null, snippet: snippet(r.body) };
+  }
+
+  // 7. Pinnacle — PGA Tour matchups (league 890)
+  {
+    const r = await httpsGet('guest.api.arcadia.pinnacle.com',
+      '/v2/matchups?leagueIds=890&brandId=0',
+      { 'User-Agent': UA, 'Accept': 'application/json', 'X-API-Key': 'CmX2KcMrXuFmNg6YFbmTxE0y9CblvR6LqCWhx0NC' });
+    const parsed = tryParse(r.body);
+    report.pinnacle_pga = { status: r.status, count: parsed ? parsed.length : null, sample: parsed ? parsed.slice(0,3).map(function(m) { return { id: m.id, description: m.description, type: m.type }; }) : null, snippet: snippet(r.body) };
+  }
+
+  // 8. PointsBet
+  {
+    const r = await httpsGet('api.pointsbet.com',
+      '/api/v2/competitions?sport_name=Golf',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
+    report.pointsbet = { status: r.status, snippet: snippet(r.body) };
+  }
+
+  // 9. BetRivers / Rush Street (uses Kambi backend — very open)
+  {
+    const r = await httpsGet('eu-offering.kambicdn.com',
+      '/offering/v2018/betrivers/group/get.json?id=1000093190&lang=en_US&market=US&client_id=2&channel_id=1&ncid=1&category=golf',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
+    const parsed = tryParse(r.body);
+    report.betrivers_kambi = { status: r.status, snippet: snippet(r.body), groupCount: parsed && parsed.group ? parsed.group.length : null };
+  }
+
+  // 10. Kambi direct — used by many books (PointsBet, BetRivers, Unibet)
+  // Golf events endpoint
+  {
+    const r = await httpsGet('eu-offering.kambicdn.com',
+      '/offering/v2018/betrivers/listView/golf.json?lang=en_US&market=US&client_id=2&channel_id=1&ncid=1&start=0&size=20',
+      { 'User-Agent': UA, 'Accept': 'application/json' });
+    const parsed = tryParse(r.body);
+    report.kambi_golf_events = { status: r.status, eventCount: parsed && parsed.events ? parsed.events.length : null, events: parsed && parsed.events ? parsed.events.slice(0,5).map(function(e) { return { id: e.event && e.event.id, name: e.event && e.event.name, betOfferCount: e.betOffers ? e.betOffers.length : 0 }; }) : null, snippet: snippet(r.body) };
+  }
 
   res.json(report);
 });
+
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
