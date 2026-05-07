@@ -1657,6 +1657,65 @@ app.post('/golf/:slug/odds/manual', async (req, res) => {
 
 
 // ── GroupMe ────────────────────────────────────────────────────────
+
+// ── BetMGM browser-fetched odds ─────────────────────────────────────
+// Browser fetches BetMGM directly, parses client-side, POSTs here for matching.
+app.post('/golf/:slug/odds/betmgm', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { odds } = req.body;
+  if (!odds || typeof odds !== 'object') return res.status(400).json({ error: 'No odds provided' });
+  const matched = [], unmatched = [];
+  const safeOdds = {};
+  Object.entries(odds).forEach(([name, val]) => {
+    const safeKey = name.replace(/[.#$\/\[\]]/g, '_');
+    safeOdds[safeKey] = { dk: val.win, dk_top10: val.top10, dk_cut: val.cut, displayName: name };
+  });
+  draft.oddsCache = safeOdds;
+  draft.field = draft.field.map(p => {
+    const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
+    const exact = safeOdds[safeKey];
+    if (exact) {
+      matched.push(p.name);
+      const u = { ...p };
+      if (exact.dk) u.odds_dk = exact.dk;
+      if (exact.dk_top10) u.odds_top10 = exact.dk_top10;
+      if (exact.dk_cut) u.odds_cut = exact.dk_cut;
+      return u;
+    }
+    const normalizedP = p.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[.#$\/\[\]]/g, '_');
+    const normKey = Object.keys(safeOdds).find(k => k.toLowerCase() === normalizedP);
+    if (normKey) {
+      matched.push(p.name);
+      const o = safeOdds[normKey];
+      const u = { ...p };
+      if (o.dk) u.odds_dk = o.dk;
+      if (o.dk_top10) u.odds_top10 = o.dk_top10;
+      if (o.dk_cut) u.odds_cut = o.dk_cut;
+      return u;
+    }
+    const lastName = normalizedP.split(' ').pop();
+    const lastKey = Object.keys(safeOdds).find(k => k.split('_').pop().toLowerCase() === lastName);
+    if (lastKey) {
+      matched.push(p.name);
+      const o = safeOdds[lastKey];
+      const u = { ...p };
+      if (o.dk) u.odds_dk = o.dk;
+      if (o.dk_top10) u.odds_top10 = o.dk_top10;
+      if (o.dk_cut) u.odds_cut = o.dk_cut;
+      return u;
+    }
+    unmatched.push({ name: p.name });
+    return p;
+  });
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  const availableOdds = Object.entries(safeOdds)
+    .map(([, o]) => ({ name: o.displayName, dk: o.dk, dk_top10: o.dk_top10, dk_cut: o.dk_cut }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ matched: matched.length, unmatched, availableOdds, source: 'betmgm-browser', updated: new Date().toISOString() });
+});
+
 const GROUPME_BOT_TEST = 'af8ec9a284c08aa0c9d0c2e231';
 const GROUPME_BOT_LIVE = '36cc1e93ae09476fa837b1b4bd';
 
