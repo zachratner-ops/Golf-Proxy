@@ -1267,6 +1267,78 @@ app.get('/golf/diag/books5', async (req, res) => {
   res.json(report);
 });
 
+// ── BetMGM access ID hunter ────────────────────────────────────────────────────
+// Fetches BetMGM's own frontend to extract the CDS API access ID from their JS
+// Hit: GET /golf/diag/books6
+//
+app.get('/golf/diag/books6', async (req, res) => {
+  function snip(body, len) { return (body || '').slice(0, len || 500); }
+  async function safeGzip(host, path, headers) {
+    try { return await httpsGetGzip(host, path, headers || {}); }
+    catch(e) { return { status: null, body: '', error: e.message, headers: {} }; }
+  }
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  const H = { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Encoding': 'gzip, deflate, br', 'Accept-Language': 'en-US,en;q=0.9' };
+  const report = {};
+
+  // Step 1: Fetch BetMGM homepage to get JS bundle URLs
+  {
+    const r = await safeGzip('sports.betmgm.com', '/en/sports/golf-4', H);
+    report.homepage = { status: r.status, error: r.error, bodyLen: (r.body||'').length, snippet: snip(r.body, 1000) };
+
+    // Look for script src URLs in the HTML
+    const scriptMatches = (r.body || '').match(/src="([^"]*\.js[^"]*)"/g) || [];
+    report.scriptTags = scriptMatches.slice(0, 10);
+
+    // Look for the access ID directly in the HTML (sometimes inlined)
+    const accessIdMatch = (r.body || '').match(/[Aa]ccess[Ii]d['":\s]+([A-Za-z0-9+/=_-]{20,})/);
+    const bwinMatch = (r.body || '').match(/x-bwin-accessid['":\s]+([A-Za-z0-9+/=_-]{20,})/i);
+    const cdsMatch = (r.body || '').match(/cds-api[^"]*accessid['":\s=]+([A-Za-z0-9+/=_-]{20,})/i);
+    report.accessIdInHtml = { accessId: accessIdMatch?.[1], bwinId: bwinMatch?.[1], cdsId: cdsMatch?.[1] };
+  }
+
+  // Step 2: Try fetching their config/environment JS file directly
+  // BetMGM often serves a config file at a predictable path
+  const configPaths = [
+    '/assets/config.json',
+    '/assets/env.json',
+    '/assets/app-config.json',
+    '/en/sports/assets/config.json',
+    '/config.json',
+  ];
+  for (const path of configPaths) {
+    const r = await safeGzip('sports.betmgm.com', path, { ...H, 'Accept': 'application/json' });
+    if (r.status === 200 && r.body) {
+      // Look for access ID
+      const match = (r.body || '').match(/[Aa]ccess[Ii]d['":\s]+([A-Za-z0-9+/=_-]{20,})/);
+      report['config_' + path.split('/').pop()] = { status: r.status, hasAccessId: !!match, accessId: match?.[1], snippet: snip(r.body) };
+    } else {
+      report['config_' + path.split('/').pop()] = { status: r.status, error: r.error };
+    }
+  }
+
+  // Step 3: Try their NJ/PA specific config
+  const njPaths = [
+    '/assets/config.json',
+    '/en/sports/assets/appsettings.json',
+    '/appsettings.json',
+  ];
+  for (const host of ['nj.betmgm.com', 'sports.betmgm.com']) {
+    for (const path of njPaths) {
+      const r = await safeGzip(host, path, { ...H, 'Accept': 'application/json' });
+      const key = host.split('.')[0] + '_' + path.split('/').pop();
+      if (r.status === 200) {
+        const match = (r.body || '').match(/[Aa]ccess[Ii]d['":\s]+([A-Za-z0-9+/=_-]{20,})/);
+        report[key] = { status: r.status, hasAccessId: !!match, accessId: match?.[1], snippet: snip(r.body, 300) };
+      } else {
+        report[key] = { status: r.status, error: r.error };
+      }
+    }
+  }
+
+  res.json(report);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
