@@ -848,6 +848,103 @@ app.get('/golf/diag/books', async (req, res) => {
 
 
 
+// ── Round 2: BetMGM + Pinnacle deep probe ─────────────────────────────────────
+// Hit: GET /golf/diag/books2
+//
+app.get('/golf/diag/books2', async (req, res) => {
+  function tryParse(body) { try { return JSON.parse(body); } catch(e) { return null; } }
+  function snip(body, len) { return (body || '').slice(0, len || 600); }
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  async function safeGet(host, path, headers) {
+    try { return await httpsGet(host, path, headers || {}); }
+    catch(e) { return { status: null, body: '', error: e.message }; }
+  }
+  const H = { 'User-Agent': UA, 'Accept': 'application/json' };
+  const report = {};
+
+  // ── BetMGM / Entain — try multiple endpoint patterns ───────────────────────
+  // Their API lives under nj.betmgm.com or sports.betmgm.com
+  const betmgmPaths = [
+    '/en/sports/api/sportsdata/event/golf/outrights?lang=en-us',
+    '/en/sports/api/sportsdata/events?sport=golf&lang=en-us',
+    '/en/sports/api/sportsdata/betoffers/golf?lang=en-us',
+    '/en/sports/golf/outrights',
+    '/api/sportsbook/v2/sports/golf/events?jurisdiction=NJ',
+  ];
+  for (const path of betmgmPaths) {
+    const r = await safeGet('sports.betmgm.com', path, H);
+    const parsed = tryParse(r.body);
+    report['betmgm_' + path.split('/').pop().split('?')[0]] = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body || '').length,
+      isJson: !!parsed,
+      snippet: snip(r.body, 400),
+    };
+  }
+
+  // Also try nj subdomain
+  {
+    const r = await safeGet('nj.betmgm.com', '/en/sports/api/sportsdata/competition/golf/outright-matches?lang=en-us', H);
+    report.betmgm_nj = { status: r.status, error: r.error, bodyLen: (r.body||'').length, snippet: snip(r.body) };
+  }
+
+  // ── Pinnacle — find the right golf league ID ────────────────────────────────
+  // Sport 10 = golf on Pinnacle. Try the straight/markets endpoint
+  const pinnacleKey = { 'User-Agent': UA, 'Accept': 'application/json', 'X-API-Key': 'CmX2KcMrXuFmNg6YFbmTxE0y9CblvR6LqCWhx0NC' };
+
+  // Try v3 API (newer)
+  {
+    const r = await safeGet('guest.api.arcadia.pinnacle.com', '/v3/sports/10/leagues?brandId=0', pinnacleKey);
+    const parsed = tryParse(r.body);
+    report.pinnacle_v3_leagues = { status: r.status, error: r.error, leagues: parsed ? JSON.stringify(parsed).slice(0,600) : null, snippet: snip(r.body) };
+  }
+
+  // Try without API key
+  {
+    const r = await safeGet('guest.api.arcadia.pinnacle.com', '/v2/leagues?sportId=10', H);
+    const parsed = tryParse(r.body);
+    report.pinnacle_no_key = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  // Try the main Pinnacle feeds API (different subdomain)
+  {
+    const r = await safeGet('api.pinnacle.com', '/v1/leagues?sportId=10', { 'User-Agent': UA, 'Accept': 'application/json' });
+    report.pinnacle_main_api = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  // Pinnacle feeds (public, no auth needed historically)
+  {
+    const r = await safeGet('feeds.pinnacle.com', '/v1/leagues?sportId=10', H);
+    report.pinnacle_feeds = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  // Try the straight Pinnacle odds API (different from arcadia)
+  {
+    const r = await safeGet('pinnacle.com', '/api/v3/leagues?sportId=10', { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://pinnacle.com' });
+    report.pinnacle_direct = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  // ── Also try: OddsJam public feed, Action Network, ESPN BET ────────────────
+  {
+    const r = await safeGet('api.actionnetwork.com', '/web/v1/scoreboard?sport=golf&division=pga-tour', H);
+    report.actionnetwork = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  {
+    const r = await safeGet('api.actionnetwork.com', '/web/v2/odds?sport=golf&market=outright_winner', H);
+    report.actionnetwork_odds = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  // ESPN BET (formerly PENN) — uses Kambi but different CDN
+  {
+    const r = await safeGet('offering.espnbet.com',
+      '/offering/v2018/espnbet/listView/golf.json?lang=en_US&market=US&client_id=2&channel_id=1&ncid=1&start=0&size=10', H);
+    report.espnbet_kambi = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  res.json(report);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
