@@ -769,100 +769,83 @@ app.get('/golf/diag/books', async (req, res) => {
   function tryParse(body) {
     try { return JSON.parse(body); } catch(e) { return null; }
   }
-  function snippet(body, len) { return (body || '').slice(0, len || 500); }
+  function snip(body, len) { return (body || '').slice(0, len || 500); }
   const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-  const report = {};
 
-  // 1. DraftKings (expected 403 — confirming)
-  {
-    const r = await httpsGet('sportsbook.draftkings.com',
-      '/sites/US-SB/api/v5/eventgroups/11106758?format=json',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
-    report.draftkings = { status: r.status, snippet: snippet(r.body) };
+  // Safe wrapper — never throws, always returns {status, body} or {error}
+  async function safeGet(host, path, headers) {
+    try {
+      return await httpsGet(host, path, headers || {});
+    } catch(e) {
+      return { status: null, body: '', error: e.message };
+    }
   }
 
-  // 2. FanDuel — competition list
+  const report = {};
+  const H = { 'User-Agent': UA, 'Accept': 'application/json' };
+
+  // 1. DraftKings (expected 403 from Railway)
   {
-    const r = await httpsGet('sbapi.fanduel.com',
+    const r = await safeGet('sportsbook.draftkings.com', '/sites/US-SB/api/v5/eventgroups/11106758?format=json', H);
+    report.draftkings = { status: r.status, error: r.error, snippet: snip(r.body) };
+  }
+
+  // 2. FanDuel competitions
+  {
+    const r = await safeGet('sbapi.fanduel.com',
       '/getcompetitions?_ak=FhMFpcPWXMeyZxOx&betexRegion=GBR&capiJurisdiction=intl&currencyCode=USD&exchangeLocale=en_US&includePrices=true&language=en&priceHistory=1&regionCode=INTL&_=1',
       { 'User-Agent': UA, 'Accept': 'application/json', 'Origin': 'https://www.fanduel.com' });
     const parsed = tryParse(r.body);
-    const golfComps = parsed && parsed.competitions ? parsed.competitions.filter(function(c) { return c.name && (c.name.toLowerCase().indexOf('golf') > -1 || c.name.toLowerCase().indexOf('pga') > -1); }) : null;
-    report.fanduel_competitions = { status: r.status, golfComps: golfComps ? golfComps.slice(0,5) : null, snippet: snippet(r.body) };
+    const golf = parsed && parsed.competitions ? parsed.competitions.filter(function(c) { return c.name && (c.name.toLowerCase().indexOf('golf') > -1 || c.name.toLowerCase().indexOf('pga') > -1); }) : null;
+    report.fanduel = { status: r.status, error: r.error, golfComps: golf ? golf.slice(0,5) : null, snippet: snip(r.body) };
   }
 
-  // 3. FanDuel US sportsbook alternate
+  // 3. BetMGM
   {
-    const r = await httpsGet('api.fanduel.com',
-      '/sports/golf?_ak=FhMFpcPWXMeyZxOx',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
-    report.fanduel_us = { status: r.status, snippet: snippet(r.body) };
-  }
-
-  // 4. BetMGM / Entain
-  {
-    const r = await httpsGet('sports.betmgm.com',
-      '/en/sports/api/sportsdata/competition/golf/outright-matches?lang=en-us',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
+    const r = await safeGet('sports.betmgm.com', '/en/sports/api/sportsdata/competition/golf/outright-matches?lang=en-us', H);
     const parsed = tryParse(r.body);
-    report.betmgm = { status: r.status, eventCount: parsed && Array.isArray(parsed) ? parsed.length : null, snippet: snippet(r.body) };
+    report.betmgm = { status: r.status, error: r.error, eventCount: Array.isArray(parsed) ? parsed.length : null, snippet: snip(r.body) };
   }
 
-  // 5. Caesars
+  // 4. Caesars
   {
-    const r = await httpsGet('api.caesars.com',
-      '/sportsbook-feeds/v2/sports/GOLF/competitions?locale=en-US&max=20',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
-    report.caesars = { status: r.status, snippet: snippet(r.body) };
+    const r = await safeGet('api.caesars.com', '/sportsbook-feeds/v2/sports/GOLF/competitions?locale=en-US&max=20', H);
+    report.caesars = { status: r.status, error: r.error, snippet: snip(r.body) };
   }
 
-  // 6. Pinnacle — well-known open API, golf sport id=10
+  // 5. Pinnacle leagues (golf sport id=10) — known open API
   {
-    const r = await httpsGet('guest.api.arcadia.pinnacle.com',
-      '/v2/leagues?sportId=10&brandId=0',
+    const r = await safeGet('guest.api.arcadia.pinnacle.com', '/v2/leagues?sportId=10&brandId=0',
       { 'User-Agent': UA, 'Accept': 'application/json', 'X-API-Key': 'CmX2KcMrXuFmNg6YFbmTxE0y9CblvR6LqCWhx0NC' });
     const parsed = tryParse(r.body);
-    report.pinnacle_leagues = { status: r.status, leagues: parsed && parsed.leagues ? parsed.leagues.slice(0,8).map(function(l) { return { id: l.id, name: l.name }; }) : null, snippet: snippet(r.body) };
+    report.pinnacle_leagues = { status: r.status, error: r.error, leagues: parsed && parsed.leagues ? parsed.leagues.slice(0,8).map(function(l) { return { id: l.id, name: l.name }; }) : null, snippet: snip(r.body) };
   }
 
-  // 7. Pinnacle — PGA Tour matchups (league 890)
+  // 6. Pinnacle PGA Tour matchups (league 890)
   {
-    const r = await httpsGet('guest.api.arcadia.pinnacle.com',
-      '/v2/matchups?leagueIds=890&brandId=0',
+    const r = await safeGet('guest.api.arcadia.pinnacle.com', '/v2/matchups?leagueIds=890&brandId=0',
       { 'User-Agent': UA, 'Accept': 'application/json', 'X-API-Key': 'CmX2KcMrXuFmNg6YFbmTxE0y9CblvR6LqCWhx0NC' });
     const parsed = tryParse(r.body);
-    report.pinnacle_pga = { status: r.status, count: parsed ? parsed.length : null, sample: parsed ? parsed.slice(0,3).map(function(m) { return { id: m.id, description: m.description, type: m.type }; }) : null, snippet: snippet(r.body) };
+    report.pinnacle_pga = { status: r.status, error: r.error, count: Array.isArray(parsed) ? parsed.length : null, sample: Array.isArray(parsed) ? parsed.slice(0,3).map(function(m) { return { id: m.id, description: m.description, type: m.type }; }) : null, snippet: snip(r.body) };
+  }
+
+  // 7. Kambi (BetRivers backend) — golf event list
+  {
+    const r = await safeGet('eu-offering.kambicdn.com',
+      '/offering/v2018/betrivers/listView/golf.json?lang=en_US&market=US&client_id=2&channel_id=1&ncid=1&start=0&size=20', H);
+    const parsed = tryParse(r.body);
+    report.kambi_betrivers = { status: r.status, error: r.error, eventCount: parsed && parsed.events ? parsed.events.length : null, events: parsed && parsed.events ? parsed.events.slice(0,5).map(function(e) { return { id: e.event && e.event.id, name: e.event && e.event.name, betOfferCount: e.betOffers ? e.betOffers.length : 0 }; }) : null, snippet: snip(r.body) };
   }
 
   // 8. PointsBet
   {
-    const r = await httpsGet('api.pointsbet.com',
-      '/api/v2/competitions?sport_name=Golf',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
-    report.pointsbet = { status: r.status, snippet: snippet(r.body) };
-  }
-
-  // 9. BetRivers / Rush Street (uses Kambi backend — very open)
-  {
-    const r = await httpsGet('eu-offering.kambicdn.com',
-      '/offering/v2018/betrivers/group/get.json?id=1000093190&lang=en_US&market=US&client_id=2&channel_id=1&ncid=1&category=golf',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
-    const parsed = tryParse(r.body);
-    report.betrivers_kambi = { status: r.status, snippet: snippet(r.body), groupCount: parsed && parsed.group ? parsed.group.length : null };
-  }
-
-  // 10. Kambi direct — used by many books (PointsBet, BetRivers, Unibet)
-  // Golf events endpoint
-  {
-    const r = await httpsGet('eu-offering.kambicdn.com',
-      '/offering/v2018/betrivers/listView/golf.json?lang=en_US&market=US&client_id=2&channel_id=1&ncid=1&start=0&size=20',
-      { 'User-Agent': UA, 'Accept': 'application/json' });
-    const parsed = tryParse(r.body);
-    report.kambi_golf_events = { status: r.status, eventCount: parsed && parsed.events ? parsed.events.length : null, events: parsed && parsed.events ? parsed.events.slice(0,5).map(function(e) { return { id: e.event && e.event.id, name: e.event && e.event.name, betOfferCount: e.betOffers ? e.betOffers.length : 0 }; }) : null, snippet: snippet(r.body) };
+    const r = await safeGet('api.pointsbet.com', '/api/v2/competitions?sport_name=Golf', H);
+    report.pointsbet = { status: r.status, error: r.error, snippet: snip(r.body) };
   }
 
   res.json(report);
 });
+
 
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
