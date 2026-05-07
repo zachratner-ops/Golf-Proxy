@@ -726,13 +726,13 @@ async function fetchGolfOdds() {
     if (!golfSports.length) return { error: 'No active golf events found in Odds API' };
     console.log(`[odds] Active golf keys: ${golfSports.map(s => s.key).join(', ')}`);
 
-    // Step 2: Fetch win odds (outrights) — DK only
+    // Step 2: Fetch win odds — DK + FD
     const odds = {};
     let foundEvent = null;
     let foundEventId = null;
     for (const sport of golfSports) {
       const { status, body } = await httpsGet('api.the-odds-api.com',
-        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings&oddsFormat=american`,
+        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel&oddsFormat=american`,
         { 'Accept': 'application/json' });
       if (status === 401) return { error: 'Invalid Odds API key' };
       if (status !== 200) continue;
@@ -747,7 +747,9 @@ async function fetchGolfOdds() {
             (market.outcomes || []).forEach(outcome => {
               const name = outcome.name, price = outcome.price;
               if (!odds[name]) odds[name] = {};
-              odds[name].dk = price > 0 ? `+${price}` : `${price}`;
+              const fmt = price > 0 ? `+${price}` : `${price}`;
+              if (bm.key === 'draftkings') odds[name].dk = fmt;
+              if (bm.key === 'fanduel')    odds[name].fd = fmt;
             });
           });
         });
@@ -812,10 +814,24 @@ app.post('/golf/:slug/odds', async (req, res) => {
   draft.field = draft.field.map(p => {
     const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
     const exact = safeOdds[safeKey];
-    if (exact) { matched.push(p.name); const o={...p, odds_dk:exact.dk}; if(exact.dk_top10) o.odds_top10=exact.dk_top10; if(exact.dk_cut) o.odds_cut=exact.dk_cut; return o; }
+    if (exact) {
+      matched.push(p.name);
+      const o = { ...p, odds_dk: exact.dk };
+      if (exact.fd) o.odds_fd = exact.fd;
+      if (exact.dk_top10) o.odds_top10 = exact.dk_top10;
+      if (exact.dk_cut) o.odds_cut = exact.dk_cut;
+      return o;
+    }
     const lastName = p.name.split(' ').pop().toLowerCase();
-    const matchKey = Object.keys(safeOdds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
-    if (matchKey) { matched.push(p.name); const o={...p, odds_dk:safeOdds[matchKey].dk}; if(safeOdds[matchKey].dk_top10) o.odds_top10=safeOdds[matchKey].dk_top10; if(safeOdds[matchKey].dk_cut) o.odds_cut=safeOdds[matchKey].dk_cut; return o; }
+    const matchKey = Object.keys(safeOdds).find(k => k.split(' ').pop().toLowerCase() === lastName);
+    if (matchKey) {
+      matched.push(p.name);
+      const o = { ...p, odds_dk: safeOdds[matchKey].dk };
+      if (safeOdds[matchKey].fd) o.odds_fd = safeOdds[matchKey].fd;
+      if (safeOdds[matchKey].dk_top10) o.odds_top10 = safeOdds[matchKey].dk_top10;
+      if (safeOdds[matchKey].dk_cut) o.odds_cut = safeOdds[matchKey].dk_cut;
+      return o;
+    }
     unmatched.push({ name: p.name });
     return p;
   });
