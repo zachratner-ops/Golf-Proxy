@@ -155,6 +155,41 @@ function httpsGet(hostname, path, headers) {
   });
 }
 
+// gzip-aware version — handles compressed responses (needed for BetMGM etc.)
+const zlib = require('zlib');
+function httpsGetGzip(hostname, path, headers) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path, method: 'GET', headers }, (r) => {
+      const chunks = [];
+      r.on('data', chunk => chunks.push(chunk));
+      r.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        const enc = r.headers['content-encoding'] || '';
+        if (enc.includes('gzip')) {
+          zlib.gunzip(buf, (err, decoded) => {
+            if (err) resolve({ status: r.statusCode, body: buf.toString(), headers: r.headers });
+            else resolve({ status: r.statusCode, body: decoded.toString('utf8'), headers: r.headers });
+          });
+        } else if (enc.includes('deflate')) {
+          zlib.inflate(buf, (err, decoded) => {
+            if (err) resolve({ status: r.statusCode, body: buf.toString(), headers: r.headers });
+            else resolve({ status: r.statusCode, body: decoded.toString('utf8'), headers: r.headers });
+          });
+        } else if (enc.includes('br')) {
+          zlib.brotliDecompress(buf, (err, decoded) => {
+            if (err) resolve({ status: r.statusCode, body: buf.toString(), headers: r.headers });
+            else resolve({ status: r.statusCode, body: decoded.toString('utf8'), headers: r.headers });
+          });
+        } else {
+          resolve({ status: r.statusCode, body: buf.toString('utf8'), headers: r.headers });
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 // ── State ──────────────────────────────────────────────────────────
 const drafts = {};
 const OWNERS = ['Mark','Marc','Jared','Andrew','Zach','Ben','Matt'];
@@ -1031,6 +1066,116 @@ app.get('/golf/diag/books3', async (req, res) => {
       bodyLen: (r.body||'').length,
       isJson: !!parsed,
       topKeys: parsed ? Object.keys(parsed) : null,
+      snippet: snip(r.body),
+    };
+  }
+
+  res.json(report);
+});
+
+// ── BetMGM gzip probe ─────────────────────────────────────────────────────────
+// Hit: GET /golf/diag/books4
+//
+app.get('/golf/diag/books4', async (req, res) => {
+  function tryParse(body) { try { return JSON.parse(body); } catch(e) { return null; } }
+  function snip(body, len) { return (body || '').slice(0, len || 800); }
+  async function safeGzip(host, path, headers) {
+    try { return await httpsGetGzip(host, path, headers || {}); }
+    catch(e) { return { status: null, body: '', error: e.message, headers: {} }; }
+  }
+  const report = {};
+
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  const FULL_H = {
+    'User-Agent': UA,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Referer': 'https://sports.betmgm.com/en/sports/golf-4',
+    'Origin': 'https://sports.betmgm.com',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'x-requested-with': 'XMLHttpRequest',
+    'Connection': 'keep-alive',
+  };
+
+  // First: check response headers on a known-200 endpoint to understand what's happening
+  {
+    const r = await safeGzip('sports.betmgm.com',
+      '/en/sports/api/sportsdata/outrightgroups?sportId=4&lang=en-us', FULL_H);
+    const parsed = tryParse(r.body);
+    report.mgm_outrightgroups_gzip = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      contentEncoding: r.headers && r.headers['content-encoding'],
+      contentType: r.headers && r.headers['content-type'],
+      allHeaders: r.headers,
+      isJson: !!parsed,
+      topKeys: parsed ? Object.keys(parsed) : null,
+      snippet: snip(r.body),
+    };
+  }
+
+  // Try sports endpoint to discover sport IDs
+  {
+    const r = await safeGzip('sports.betmgm.com', '/en/sports/api/sportsdata/sports?lang=en-us', FULL_H);
+    const parsed = tryParse(r.body);
+    report.mgm_sports_gzip = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      contentEncoding: r.headers && r.headers['content-encoding'],
+      isJson: !!parsed,
+      snippet: snip(r.body),
+    };
+  }
+
+  // Try with no Accept-Encoding to force uncompressed
+  {
+    const NO_ENC_H = { ...FULL_H };
+    delete NO_ENC_H['Accept-Encoding'];
+    const r = await safeGzip('sports.betmgm.com',
+      '/en/sports/api/sportsdata/outrightgroups?sportId=4&lang=en-us', NO_ENC_H);
+    const parsed = tryParse(r.body);
+    report.mgm_no_encoding = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      contentEncoding: r.headers && r.headers['content-encoding'],
+      isJson: !!parsed,
+      snippet: snip(r.body),
+    };
+  }
+
+  // Try their CDN API (msports) — different subdomain pattern used by Entain
+  const entainPaths = [
+    '/en/sports/api/sportsdata/competitions?sportId=4&lang=en-us&jurisdiction=NJ',
+    '/en/sports/api/sportsdata/fixtures?sportId=4&competitionId=&lang=en-us&count=20',
+    '/en/sports/api/sportsdata/outrights?sportId=4&jurisdiction=NJ&lang=en-us',
+    '/en/sports/api/sportsdata/markets?sportId=4&lang=en-us',
+  ];
+  for (const path of entainPaths) {
+    const r = await safeGzip('sports.betmgm.com', path, FULL_H);
+    const parsed = tryParse(r.body);
+    const key = 'mgm_' + path.split('?')[0].split('/').pop();
+    report[key] = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      contentEncoding: r.headers && r.headers['content-encoding'],
+      isJson: !!parsed,
+      snippet: snip(r.body, 400),
+    };
+  }
+
+  // Try NJ-specific subdomain with gzip
+  {
+    const r = await safeGzip('nj.betmgm.com',
+      '/en/sports/api/sportsdata/outrightgroups?sportId=4&lang=en-us', FULL_H);
+    const parsed = tryParse(r.body);
+    report.mgm_nj_gzip = {
+      status: r.status, error: r.error,
+      bodyLen: (r.body||'').length,
+      contentEncoding: r.headers && r.headers['content-encoding'],
+      isJson: !!parsed,
       snippet: snip(r.body),
     };
   }
