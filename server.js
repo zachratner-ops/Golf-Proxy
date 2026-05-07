@@ -1183,6 +1183,90 @@ app.get('/golf/diag/books4', async (req, res) => {
   res.json(report);
 });
 
+// ── BetMGM documented Sports API probe ────────────────────────────────────────
+// Uses their actual documented REST API at sportsapi.nj.betmgm.com
+// Hit: GET /golf/diag/books5
+//
+app.get('/golf/diag/books5', async (req, res) => {
+  function tryParse(body) { try { return JSON.parse(body); } catch(e) { return null; } }
+  function snip(body, len) { return (body || '').slice(0, len || 1000); }
+  async function safeGzip(host, path, headers) {
+    try { return await httpsGetGzip(host, path, headers || {}); }
+    catch(e) { return { status: null, body: '', error: e.message, headers: {} }; }
+  }
+  const report = {};
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  const H = { 'User-Agent': UA, 'Accept': 'application/json', 'Accept-Encoding': 'gzip, deflate, br' };
+
+  // BetMGM documented API hosts — NJ and PA both exist
+  const hosts = ['sportsapi.nj.betmgm.com', 'sportsapi.pa.betmgm.com'];
+
+  for (const host of hosts) {
+    const shortName = host.includes('nj') ? 'nj' : 'pa';
+
+    // Step 1: Get sports list to find golf sport ID
+    {
+      const r = await safeGzip(host, '/offer/api/US/sports', H);
+      const parsed = tryParse(r.body);
+      report[`${shortName}_sports`] = {
+        status: r.status, error: r.error,
+        bodyLen: (r.body||'').length,
+        contentEncoding: r.headers && r.headers['content-encoding'],
+        isJson: !!parsed,
+        sports: parsed && parsed.items ? parsed.items.map(s => ({ id: s.id, name: s.name && s.name[0] && s.name[0].text })) : null,
+        snippet: snip(r.body, 600),
+      };
+    }
+
+    // Step 2: Try golf sport ID = 4 (common across Entain/GVC platforms)
+    // Get competitions to find PGA Tour competition ID
+    {
+      const r = await safeGzip(host, '/offer/api/4/US/competitions', H);
+      const parsed = tryParse(r.body);
+      report[`${shortName}_golf_competitions`] = {
+        status: r.status, error: r.error,
+        bodyLen: (r.body||'').length,
+        isJson: !!parsed,
+        competitions: parsed && parsed.items ? parsed.items.slice(0,10).map(c => ({ id: c.id, name: c.name && c.name[0] && c.name[0].text })) : null,
+        snippet: snip(r.body, 600),
+      };
+    }
+
+    // Step 3: Get fixtures for golf (sport 4) — this has markets + prices
+    // onlyMainMarkets=false to get top10/cut markets too
+    {
+      const r = await safeGzip(host, '/offer/api/4/US/fixtures?onlyMainMarkets=false&language=en', H);
+      const parsed = tryParse(r.body);
+      // Extract market names from first fixture to see what's available
+      let marketNames = [];
+      let samplePlayers = [];
+      if (parsed && parsed.items && parsed.items.length > 0) {
+        const firstFixture = parsed.items[0];
+        marketNames = (firstFixture.markets || []).map(m => m.name && m.name[0] && m.name[0].text).filter(Boolean);
+        // Get first few options from first market
+        if (firstFixture.markets && firstFixture.markets[0] && firstFixture.markets[0].options) {
+          samplePlayers = firstFixture.markets[0].options.slice(0, 5).map(o => ({
+            name: o.name && o.name[0] && o.name[0].text,
+            usOdds: o.price && o.price[0] && o.price[0].usOdds,
+          }));
+        }
+      }
+      report[`${shortName}_golf_fixtures`] = {
+        status: r.status, error: r.error,
+        bodyLen: (r.body||'').length,
+        isJson: !!parsed,
+        fixtureCount: parsed && parsed.items ? parsed.items.length : null,
+        firstFixtureName: parsed && parsed.items && parsed.items[0] && parsed.items[0].name && parsed.items[0].name[0] && parsed.items[0].name[0].text,
+        marketNames,
+        samplePlayers,
+        snippet: snip(r.body, 800),
+      };
+    }
+  }
+
+  res.json(report);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
