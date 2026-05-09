@@ -426,14 +426,25 @@ async function pollAllLiveSlugs() {
   }
 }
 
-const POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+function isTournamentHours() {
+  const hour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+  return hour >= 7 && hour < 19; // 7am-7pm ET
+}
 
 // Start polling and warm cache after Firebase connects
 setTimeout(async () => {
   await warmCache();
   await pollAllLiveSlugs();
-  setInterval(pollAllLiveSlugs, POLL_INTERVAL_MS);
-  console.log(`[poller] Score poller started — interval: 15min`);
+  setInterval(() => {
+    if (isTournamentHours()) {
+      pollAllLiveSlugs();
+    } else {
+      console.log('[poller] Outside tournament hours (7am-7pm ET) — skipping');
+    }
+  }, POLL_INTERVAL_MS);
+  console.log(`[poller] Score poller started — interval: 5min, active 7am-7pm ET`);
 }, 5000);
 
 // ── WebSocket ──────────────────────────────────────────────────────
