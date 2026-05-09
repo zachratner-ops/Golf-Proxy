@@ -888,7 +888,9 @@ app.post('/golf/:slug/odds', async (req, res) => {
     const safeKey = name.replace(/[.#$\/\[\]]/g, '_');
     safeOdds[safeKey] = { ...val, displayName: name };
   });
-  const availableOdds = Object.entries(safeOdds).map(([,o])=>({name:o.displayName,dk:o.dk,dk_top10:o.dk_top10,dk_cut:o.dk_cut})).sort((a,b)=>a.name.localeCompare(b.name));
+  const availableOdds = Object.entries(safeOdds).map(([,o])=>({name:o.displayName,dk:o.dk,fd:o.fd,dk_top10:o.dk_top10,dk_cut:o.dk_cut})).sort((a,b)=>a.name.localeCompare(b.name));
+  const fdCount = Object.values(safeOdds).filter(o => o.fd).length;
+  console.log(`[odds] DK: ${Object.values(safeOdds).filter(o=>o.dk).length} players, FD: ${fdCount} players`);
   draft.oddsCache = safeOdds;
   draft.field = draft.field.map(p => {
     const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
