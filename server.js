@@ -444,10 +444,11 @@ app.get('/golf/:slug', async (req, res) => {
 app.post('/golf/:slug/setup', async (req, res) => {
   const slug = req.params.slug;
   const draft = getOrCreateDraft(slug);
-  const { name, field, autopickList, owners } = req.body;
+  const { name, field, autopickList, owners, espnEventId } = req.body;
   if (name) draft.name = name;
   if (field) draft.field = field;
   if (autopickList) draft.autopickList = autopickList;
+  if (espnEventId) draft.espnEventId = espnEventId;
   if (owners && owners.length >= 2) {
     draft.owners = owners;
     draft.picks = {};
@@ -710,6 +711,56 @@ app.get('/golf/:slug/scores', async (req, res) => {
   const scores = await fetchGolfScores(eventId);
   res.json(scores);
 });
+
+// Diagnostic: tests multiple ESPN endpoints from Railway's network
+
+// Dump raw first competitor object so we can see ESPN's score field structure
+app.get('/golf/diag/competitor', async (req, res) => {
+  const eventId = req.query.eventId || '401811941';
+  try {
+    const { status, body } = await httpsGet('site.web.api.espn.com',
+      `/apis/site/v2/sports/golf/leaderboard?event=${eventId}`,
+      {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.espn.com/golf/leaderboard',
+        'Origin': 'https://www.espn.com'
+      });
+    const data = JSON.parse(body);
+    const competitors = data?.events?.[0]?.competitions?.[0]?.competitors || [];
+    // Return first 3 competitors raw so we can see the score field location
+    res.json({ count: competitors.length, sample: competitors.slice(0, 3) });
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
+app.get('/golf/diag/espn', async (req, res) => {
+  const eventId = req.query.eventId || '401811941';
+  const paths = [
+    `/apis/site/v2/sports/golf/pga/scoreboard?dates=20260101-20261231&event=${eventId}`,
+    `/apis/site/v2/sports/golf/pga/leaderboard?event=${eventId}&league=pga`,
+    `/apis/site/v2/sports/golf/leaderboard?event=${eventId}`,
+    `/apis/site/v2/sports/golf/pga/scoreboard`,
+  ];
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+    'Referer': 'https://www.espn.com/golf/leaderboard',
+    'Origin': 'https://www.espn.com'
+  };
+  const results = [];
+  for (const path of paths) {
+    try {
+      const r = await httpsGet('site.web.api.espn.com', path, headers);
+      results.push({ path, status: r.status, preview: r.body.slice(0, 200) });
+    } catch(e) {
+      results.push({ path, error: e.message });
+    }
+  }
+  res.json(results);
+});
+
 const ODDS_API_KEY = process.env.ODDS_API_KEY || 'cfabbf2a7a75831719d5b9e0938b6b4b';
 
 async function fetchGolfOdds() {
@@ -726,13 +777,13 @@ async function fetchGolfOdds() {
     if (!golfSports.length) return { error: 'No active golf events found in Odds API' };
     console.log(`[odds] Active golf keys: ${golfSports.map(s => s.key).join(', ')}`);
 
-    // Step 2: Fetch win odds — DK + FD
+    // Step 2: Fetch win odds (outrights) — DK only
     const odds = {};
     let foundEvent = null;
     let foundEventId = null;
     for (const sport of golfSports) {
       const { status, body } = await httpsGet('api.the-odds-api.com',
-        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel&oddsFormat=american`,
+        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings&oddsFormat=american`,
         { 'Accept': 'application/json' });
       if (status === 401) return { error: 'Invalid Odds API key' };
       if (status !== 200) continue;
@@ -747,9 +798,7 @@ async function fetchGolfOdds() {
             (market.outcomes || []).forEach(outcome => {
               const name = outcome.name, price = outcome.price;
               if (!odds[name]) odds[name] = {};
-              const fmt = price > 0 ? `+${price}` : `${price}`;
-              if (bm.key === 'draftkings') odds[name].dk = fmt;
-              if (bm.key === 'fanduel')    odds[name].fd = fmt;
+              odds[name].dk = price > 0 ? `+${price}` : `${price}`;
             });
           });
         });
@@ -814,24 +863,10 @@ app.post('/golf/:slug/odds', async (req, res) => {
   draft.field = draft.field.map(p => {
     const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
     const exact = safeOdds[safeKey];
-    if (exact) {
-      matched.push(p.name);
-      const o = { ...p, odds_dk: exact.dk };
-      if (exact.fd) o.odds_fd = exact.fd;
-      if (exact.dk_top10) o.odds_top10 = exact.dk_top10;
-      if (exact.dk_cut) o.odds_cut = exact.dk_cut;
-      return o;
-    }
+    if (exact) { matched.push(p.name); const o={...p, odds_dk:exact.dk}; if(exact.dk_top10) o.odds_top10=exact.dk_top10; if(exact.dk_cut) o.odds_cut=exact.dk_cut; return o; }
     const lastName = p.name.split(' ').pop().toLowerCase();
-    const matchKey = Object.keys(safeOdds).find(k => k.split(' ').pop().toLowerCase() === lastName);
-    if (matchKey) {
-      matched.push(p.name);
-      const o = { ...p, odds_dk: safeOdds[matchKey].dk };
-      if (safeOdds[matchKey].fd) o.odds_fd = safeOdds[matchKey].fd;
-      if (safeOdds[matchKey].dk_top10) o.odds_top10 = safeOdds[matchKey].dk_top10;
-      if (safeOdds[matchKey].dk_cut) o.odds_cut = safeOdds[matchKey].dk_cut;
-      return o;
-    }
+    const matchKey = Object.keys(safeOdds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
+    if (matchKey) { matched.push(p.name); const o={...p, odds_dk:safeOdds[matchKey].dk}; if(safeOdds[matchKey].dk_top10) o.odds_top10=safeOdds[matchKey].dk_top10; if(safeOdds[matchKey].dk_cut) o.odds_cut=safeOdds[matchKey].dk_cut; return o; }
     unmatched.push({ name: p.name });
     return p;
   });
@@ -839,6 +874,99 @@ app.post('/golf/:slug/odds', async (req, res) => {
   await syncDraft(slug, draft);
   res.json({ matched: matched.length, unmatched, availableOdds, updated: result.updated });
 });
+
+app.post('/golf/:slug/odds/seed', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const seedOdds = {
+    'Scottie Scheffler':  { dk: '+450',  fd: '+500'  },
+    'Rory McIlroy':       { dk: '+600',  fd: '+650'  },
+    'Tommy Fleetwood':    { dk: '+1400', fd: '+1400' },
+    'Collin Morikawa':    { dk: '+1600', fd: '+1600' },
+    'Xander Schauffele':  { dk: '+1800', fd: '+1800' },
+    'Ludvig Aberg':       { dk: '+2000', fd: '+2000' },
+    'Bryson DeChambeau':  { dk: '+2200', fd: '+2200' },
+    'Viktor Hovland':     { dk: '+2500', fd: '+2500' },
+    'Chris Gotterup':     { dk: '+2800', fd: '+3000' },
+    'Jon Rahm':           { dk: '+3000', fd: '+3000' },
+    'Hideki Matsuyama':   { dk: '+3000', fd: '+3000' },
+    'Jordan Spieth':      { dk: '+3500', fd: '+3500' },
+    'Justin Thomas':      { dk: '+3500', fd: '+4000' },
+    'Min Woo Lee':        { dk: '+4000', fd: '+4000' },
+    'Shane Lowry':        { dk: '+4000', fd: '+4000' },
+    'Corey Conners':      { dk: '+4500', fd: '+4500' },
+    'Patrick Cantlay':    { dk: '+5000', fd: '+5000' },
+    'Robert MacIntyre':   { dk: '+5000', fd: '+5500' },
+    'Justin Rose':        { dk: '+5000', fd: '+5000' },
+    'Tyrrell Hatton':     { dk: '+5000', fd: '+5000' },
+    'Wyndham Clark':      { dk: '+5500', fd: '+5500' },
+    'Matt Fitzpatrick':   { dk: '+5500', fd: '+6000' },
+    'Akshay Bhatia':      { dk: '+6000', fd: '+6000' },
+    'Cameron Young':      { dk: '+6000', fd: '+6000' },
+    'Harris English':     { dk: '+6500', fd: '+7000' },
+    'Sam Burns':          { dk: '+6500', fd: '+6500' },
+    'Keegan Bradley':     { dk: '+7000', fd: '+7000' },
+    'Max Homa':           { dk: '+7000', fd: '+7000' },
+    'Sungjae Im':         { dk: '+7000', fd: '+7500' },
+    'Brooks Koepka':      { dk: '+7500', fd: '+8000' },
+    'Sepp Straka':        { dk: '+8000', fd: '+8000' },
+    'Jason Day':          { dk: '+8000', fd: '+8000' },
+    'Russell Henley':     { dk: '+9000', fd: '+9000' },
+    'Patrick Reed':       { dk: '+9000', fd: '+10000'},
+    'Ryan Fox':           { dk: '+10000',fd: '+10000'},
+    'Nick Taylor':        { dk: '+10000',fd: '+10000'},
+    'Cameron Smith':      { dk: '+10000',fd: '+10000'},
+    'Jacob Bridgeman':    { dk: '+12000',fd: '+12500'},
+    'Brian Harman':       { dk: '+12000',fd: '+12000'},
+    'Adam Scott':         { dk: '+15000',fd: '+15000'},
+    'Dustin Johnson':     { dk: '+15000',fd: '+15000'},
+    'JJ Spaun':           { dk: '+15000',fd: '+15000'},
+    'Andrew Novak':       { dk: '+15000',fd: '+15000'},
+    'Kurt Kitayama':      { dk: '+15000',fd: '+15000'},
+    'Aldrich Potgieter':  { dk: '+20000',fd: '+20000'},
+    'Maverick McNealy':   { dk: '+20000',fd: '+20000'},
+    'Ben Griffin':        { dk: '+20000',fd: '+20000'},
+    'Nico Echavarria':    { dk: '+20000',fd: '+20000'},
+    'Carlos Ortiz':       { dk: '+25000',fd: '+25000'},
+    'Li Haotong':         { dk: '+25000',fd: '+25000'},
+    'Brian Campbell':     { dk: '+25000',fd: '+25000'},
+    'Harry Hall':         { dk: '+25000',fd: '+25000'},
+    'Marco Penge':        { dk: '+30000',fd: '+30000'},
+    'Sergio Garcia':      { dk: '+30000',fd: '+30000'},
+    'Zach Johnson':       { dk: '+50000',fd: '+50000'},
+    'Fred Couples':       { dk: '+50000',fd: '+50000'},
+    'Bubba Watson':       { dk: '+50000',fd: '+50000'},
+    'Danny Willett':      { dk: '+50000',fd: '+50000'},
+    'Charl Schwartzel':   { dk: '+50000',fd: '+50000'},
+    'Mike Weir':          { dk: '+50000',fd: '+50000'},
+    'Vijay Singh':        { dk: '+50000',fd: '+50000'},
+    'Jose Maria Olazabal':{ dk: '+50000',fd: '+50000'},
+  };
+  // Sanitize keys for Firebase (no dots, #, $, /, [, ])
+  const safeOdds = {};
+  Object.entries(seedOdds).forEach(([name, val]) => {
+    const safeKey = name.replace(/[.#$\/\[\]]/g, '_');
+    safeOdds[safeKey] = { ...val, displayName: name };
+  });
+  draft.oddsCache = safeOdds;
+  const matched = [], unmatched = [];
+  draft.field = draft.field.map(p => {
+    const normalizedP = p.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[.#$\/\[\]]/g,'_');
+    const matchKey = Object.keys(safeOdds).find(k => k.toLowerCase() === normalizedP);
+    if (matchKey) { matched.push(p.name); return { ...p, odds_dk: safeOdds[matchKey].dk, odds_top10: safeOdds[matchKey].dk_top10, odds_cut: safeOdds[matchKey].dk_cut }; }
+    // Also try last name match
+    const lastName = normalizedP.split(' ').pop();
+    const lastMatch = Object.keys(safeOdds).find(k => k.split(' ').pop().toLowerCase() === lastName);
+    if (lastMatch) { matched.push(p.name); return { ...p, odds_dk: safeOdds[lastMatch].dk, odds_top10: safeOdds[lastMatch].dk_top10, odds_cut: safeOdds[lastMatch].dk_cut }; }
+    unmatched.push({ name: p.name });
+    return p;
+  });
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  const availableOdds = Object.entries(safeOdds).map(([,o]) => ({ name: o.displayName, dk: o.dk, dk_top10: o.dk_top10, dk_cut: o.dk_cut })).sort((a,b) => a.name.localeCompare(b.name));
+  res.json({ matched: matched.length, unmatched, availableOdds, updated: new Date().toISOString(), seeded: true });
+});
+
 
 app.post('/golf/:slug/odds/manual', async (req, res) => {
   const slug = req.params.slug;
@@ -854,6 +982,7 @@ app.post('/golf/:slug/odds/manual', async (req, res) => {
 });
 
 
+// ── GroupMe ────────────────────────────────────────────────────────
 const GROUPME_BOT_TEST = 'af8ec9a284c08aa0c9d0c2e231';
 const GROUPME_BOT_LIVE = '36cc1e93ae09476fa837b1b4bd';
 
