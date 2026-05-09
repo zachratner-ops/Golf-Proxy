@@ -817,6 +817,10 @@ async function fetchGolfOdds() {
       if (!data.length) continue;
       foundEvent = sport.title;
       foundEventId = data[0]?.id || null;
+      // Log which bookmakers are actually returning data
+      const booksFound = new Set();
+      data.forEach(event => (event.bookmakers || []).forEach(bm => booksFound.add(bm.key)));
+      console.log(`[odds] Bookmakers available for ${sport.title}: ${[...booksFound].join(', ')}`);
       data.forEach(event => {
         (event.bookmakers || []).forEach(bm => {
           (bm.markets || []).forEach(market => {
@@ -895,10 +899,24 @@ app.post('/golf/:slug/odds', async (req, res) => {
   draft.field = draft.field.map(p => {
     const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
     const exact = safeOdds[safeKey];
-    if (exact) { matched.push(p.name); const o={...p, odds_dk:exact.dk, odds_fd:exact.fd}; if(exact.dk_top10) o.odds_top10=exact.dk_top10; if(exact.dk_cut) o.odds_cut=exact.dk_cut; return o; }
+    if (exact) {
+      matched.push(p.name);
+      const o = {...p, odds_dk: exact.dk};
+      if (exact.fd) o.odds_fd = exact.fd;
+      if (exact.dk_top10) o.odds_top10 = exact.dk_top10;
+      if (exact.dk_cut) o.odds_cut = exact.dk_cut;
+      return o;
+    }
     const lastName = p.name.split(' ').pop().toLowerCase();
     const matchKey = Object.keys(safeOdds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
-    if (matchKey) { matched.push(p.name); const o={...p, odds_dk:safeOdds[matchKey].dk, odds_fd:safeOdds[matchKey].fd}; if(safeOdds[matchKey].dk_top10) o.odds_top10=safeOdds[matchKey].dk_top10; if(safeOdds[matchKey].dk_cut) o.odds_cut=safeOdds[matchKey].dk_cut; return o; }
+    if (matchKey) {
+      matched.push(p.name);
+      const o = {...p, odds_dk: safeOdds[matchKey].dk};
+      if (safeOdds[matchKey].fd) o.odds_fd = safeOdds[matchKey].fd;
+      if (safeOdds[matchKey].dk_top10) o.odds_top10 = safeOdds[matchKey].dk_top10;
+      if (safeOdds[matchKey].dk_cut) o.odds_cut = safeOdds[matchKey].dk_cut;
+      return o;
+    }
     unmatched.push({ name: p.name });
     return p;
   });
