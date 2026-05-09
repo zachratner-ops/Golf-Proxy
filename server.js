@@ -269,8 +269,23 @@ async function fetchGolfScores(eventId) {
     const competition = data?.events?.[0]?.competitions?.[0] || {};
     const competitors = competition?.competitors || [];
 
-    // Round number — ESPN uses status.period (1-4) at the competition level
-    const currentRound = competition?.status?.period || null;
+    // Round number — ESPN uses different fields depending on API version
+    // Try status.period first, then check competitors for their current round
+    let currentRound = competition?.status?.period || null;
+    if (!currentRound) {
+      // Fallback: check the status type description e.g. "Round 2"
+      const statusDesc = competition?.status?.type?.description || '';
+      const roundMatch = statusDesc.match(/round\s*(\d)/i);
+      if (roundMatch) currentRound = parseInt(roundMatch[1], 10);
+    }
+    if (!currentRound) {
+      // Fallback: count how many linescores columns are active across competitors
+      const sampleCompetitor = (competition?.competitors || [])[0];
+      const linescores = sampleCompetitor?.linescores || [];
+      const activeRounds = linescores.filter(l => l.displayValue && l.displayValue !== '--').length;
+      if (activeRounds > 0) currentRound = activeRounds;
+    }
+    console.log(`[scores] Round detection: period=${competition?.status?.period} desc="${competition?.status?.type?.description}" → ${currentRound}`);
 
     // Cut line — ESPN exposes this on the competition object
     // Field names vary: cutLine, situation.cutLine, notes[type=cut]
@@ -777,13 +792,13 @@ async function fetchGolfOdds() {
     if (!golfSports.length) return { error: 'No active golf events found in Odds API' };
     console.log(`[odds] Active golf keys: ${golfSports.map(s => s.key).join(', ')}`);
 
-    // Step 2: Fetch win odds (outrights) — DK only
+    // Step 2: Fetch win odds (outrights) — DK + FD
     const odds = {};
     let foundEvent = null;
     let foundEventId = null;
     for (const sport of golfSports) {
       const { status, body } = await httpsGet('api.the-odds-api.com',
-        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings&oddsFormat=american`,
+        `/v4/sports/${sport.key}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=outrights&bookmakers=draftkings,fanduel&oddsFormat=american`,
         { 'Accept': 'application/json' });
       if (status === 401) return { error: 'Invalid Odds API key' };
       if (status !== 200) continue;
@@ -798,7 +813,9 @@ async function fetchGolfOdds() {
             (market.outcomes || []).forEach(outcome => {
               const name = outcome.name, price = outcome.price;
               if (!odds[name]) odds[name] = {};
-              odds[name].dk = price > 0 ? `+${price}` : `${price}`;
+              const fmt = p => p > 0 ? `+${p}` : `${p}`;
+              if (bm.key === 'draftkings') odds[name].dk = fmt(price);
+              if (bm.key === 'fanduel') odds[name].fd = fmt(price);
             });
           });
         });
@@ -814,23 +831,25 @@ async function fetchGolfOdds() {
       const sportKey = golfSports.find(s => s.title === foundEvent)?.key;
       if (sportKey) {
         const { status: eStatus, body: eBody } = await httpsGet('api.the-odds-api.com',
-          `/v4/sports/${sportKey}/events/${foundEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=player_top_10,player_make_cut&bookmakers=draftkings&oddsFormat=american`,
+          `/v4/sports/${sportKey}/events/${foundEventId}/odds?apiKey=${ODDS_API_KEY}&regions=us&markets=player_top_10,player_make_cut&bookmakers=draftkings,fanduel&oddsFormat=american`,
           { 'Accept': 'application/json' });
         if (eStatus === 200) {
           try {
             const eData = JSON.parse(eBody);
             let top10Count = 0, cutCount = 0;
             (eData.bookmakers || []).forEach(bm => {
-              if (bm.key !== 'draftkings') return;
+              if (bm.key !== 'draftkings' && bm.key !== 'fanduel') return;
+              const isFD = bm.key === 'fanduel';
               (bm.markets || []).forEach(market => {
                 (market.outcomes || []).forEach(outcome => {
                   const name = outcome.name, price = outcome.price;
-                  // Only store "Yes" outcomes (make cut yes, top10 yes)
                   if (outcome.description && outcome.description.toLowerCase() === 'no') return;
                   if (!odds[name]) odds[name] = {};
                   const fmt = p => p > 0 ? `+${p}` : `${p}`;
-                  if (market.key === 'player_top_10') { odds[name].dk_top10 = fmt(price); top10Count++; }
-                  if (market.key === 'player_make_cut') { odds[name].dk_cut = fmt(price); cutCount++; }
+                  if (!isFD) {
+                    if (market.key === 'player_top_10') { odds[name].dk_top10 = fmt(price); top10Count++; }
+                    if (market.key === 'player_make_cut') { odds[name].dk_cut = fmt(price); cutCount++; }
+                  }
                 });
               });
             });
@@ -863,10 +882,10 @@ app.post('/golf/:slug/odds', async (req, res) => {
   draft.field = draft.field.map(p => {
     const safeKey = p.name.replace(/[.#$\/\[\]]/g, '_');
     const exact = safeOdds[safeKey];
-    if (exact) { matched.push(p.name); const o={...p, odds_dk:exact.dk}; if(exact.dk_top10) o.odds_top10=exact.dk_top10; if(exact.dk_cut) o.odds_cut=exact.dk_cut; return o; }
+    if (exact) { matched.push(p.name); const o={...p, odds_dk:exact.dk, odds_fd:exact.fd}; if(exact.dk_top10) o.odds_top10=exact.dk_top10; if(exact.dk_cut) o.odds_cut=exact.dk_cut; return o; }
     const lastName = p.name.split(' ').pop().toLowerCase();
     const matchKey = Object.keys(safeOdds).find(k=>k.split(' ').pop().toLowerCase()===lastName);
-    if (matchKey) { matched.push(p.name); const o={...p, odds_dk:safeOdds[matchKey].dk}; if(safeOdds[matchKey].dk_top10) o.odds_top10=safeOdds[matchKey].dk_top10; if(safeOdds[matchKey].dk_cut) o.odds_cut=safeOdds[matchKey].dk_cut; return o; }
+    if (matchKey) { matched.push(p.name); const o={...p, odds_dk:safeOdds[matchKey].dk, odds_fd:safeOdds[matchKey].fd}; if(safeOdds[matchKey].dk_top10) o.odds_top10=safeOdds[matchKey].dk_top10; if(safeOdds[matchKey].dk_cut) o.odds_cut=safeOdds[matchKey].dk_cut; return o; }
     unmatched.push({ name: p.name });
     return p;
   });
