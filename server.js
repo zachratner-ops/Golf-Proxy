@@ -312,16 +312,22 @@ async function fetchGolfScores(eventId) {
       else { toPar = parseInt(scoreStr, 10); if (isNaN(toPar)) toPar = 0; }
       const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
 
-      // This round's score — from linescores array, last active round
+      // This round's score — use currentRound index directly (1-indexed → 0-indexed)
       let roundScore = null;
       const linescores = c.linescores || [];
-      if (linescores.length > 0) {
-        // Find the last round with a real score (not '--')
-        for (let i = linescores.length - 1; i >= 0; i--) {
-          const val = linescores[i]?.displayValue;
-          if (val && val !== '--' && val !== '') {
-            const parsed = parseInt(val, 10);
-            if (!isNaN(parsed)) { roundScore = parsed; break; }
+      if (linescores.length > 0 && currentRound) {
+        const idx = currentRound - 1;
+        const val = linescores[idx]?.displayValue;
+        if (val && val !== '--' && val !== '') {
+          roundScore = val === 'E' ? 0 : parseInt(val, 10);
+          if (isNaN(roundScore)) roundScore = null;
+        }
+        // Fallback to previous round if current has no data yet (player hasn't started)
+        if (roundScore === null && idx > 0) {
+          const prevVal = linescores[idx - 1]?.displayValue;
+          if (prevVal && prevVal !== '--' && prevVal !== '') {
+            roundScore = prevVal === 'E' ? 0 : parseInt(prevVal, 10);
+            if (isNaN(roundScore)) roundScore = null;
           }
         }
       }
