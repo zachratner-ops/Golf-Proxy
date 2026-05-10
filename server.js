@@ -416,12 +416,12 @@ async function pollAllLiveSlugs() {
       });
       const snapshotKey = `snap_${Date.now()}`;
       await fbSet(`golf/${slug}/live/scoreHistory/${snapshotKey}`, { ts: result.updated, scores: snapshotScores });
-      // Keep only last 100 snapshots to avoid unbounded growth
+      // Keep only last 1000 snapshots (~80hrs at 5min intervals — covers full tournament)
       const historyNode = await fbGet(`golf/${slug}/live/scoreHistory`);
       if (historyNode) {
         const keys = Object.keys(historyNode).sort();
-        if (keys.length > 100) {
-          const toDelete = keys.slice(0, keys.length - 100);
+        if (keys.length > 1000) {
+          const toDelete = keys.slice(0, keys.length - 1000);
           for (const k of toDelete) await fbSet(`golf/${slug}/live/scoreHistory/${k}`, null);
         }
       }
