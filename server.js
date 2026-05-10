@@ -305,11 +305,28 @@ async function fetchGolfScores(eventId) {
       const statusName = c.status?.type?.name || '';
       const cut = statusName.includes('CUT') || statusName.includes('WD') || statusName.includes('DQ');
 
-      // Total score to par
-      const scoreStr = c.score?.displayValue || c.statistics?.find(s => s.name === 'scoreToPar')?.displayValue || 'E';
+      // Total score to par — calculate from linescores for accuracy during live rounds
+      // ESPN's c.score can lag; summing linescores gives the true live total
       let toPar = 0;
-      if (scoreStr === 'E' || scoreStr === '--') { toPar = 0; }
-      else { toPar = parseInt(scoreStr, 10); if (isNaN(toPar)) toPar = 0; }
+      const allLinescores = c.linescores || [];
+      if (allLinescores.length > 0) {
+        let sum = 0, hasAny = false;
+        for (const ls of allLinescores) {
+          const v = ls?.displayValue;
+          if (!v || v === '--' || v === '') continue;
+          const n = v === 'E' ? 0 : parseInt(v, 10);
+          if (!isNaN(n)) { sum += n; hasAny = true; }
+        }
+        if (hasAny) toPar = sum;
+        else {
+          // Fallback to ESPN's cumulative
+          const scoreStr = c.score?.displayValue || 'E';
+          toPar = scoreStr === 'E' || scoreStr === '--' ? 0 : (parseInt(scoreStr, 10) || 0);
+        }
+      } else {
+        const scoreStr = c.score?.displayValue || c.statistics?.find(s => s.name === 'scoreToPar')?.displayValue || 'E';
+        toPar = scoreStr === 'E' || scoreStr === '--' ? 0 : (parseInt(scoreStr, 10) || 0);
+      }
       const display = toPar === 0 ? 'E' : (toPar > 0 ? `+${toPar}` : `${toPar}`);
 
       // This round's score — use currentRound index directly (1-indexed → 0-indexed)
