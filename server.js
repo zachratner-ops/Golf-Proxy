@@ -106,11 +106,21 @@ function stopDraftTimer(slug) {
   }
 }
 
+function isDraftNightHours() {
+  const hour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+  return hour >= 22 || hour < 8; // 10pm-8am ET
+}
+
 function checkDraftTimer(slug, warningsFired) {
   const draft = drafts[slug];
   if (!draft || draft.status !== 'drafting' || !draft.timerStart) return;
+  // Pause timer between 10pm and 8am ET — slide timerStart forward to exclude night time
+  if (isDraftNightHours()) {
+    draft.timerStart = Date.now();
+    return;
+  }
   const elapsed = (Date.now() - draft.timerStart) / 1000;
-  const remaining = (draft.timerDuration || 7200) - elapsed;
+  const remaining = (draft.timerDuration || 14400) - elapsed;
   const seq = draft.currentPhase === 'main' ? draft.pickSequence : draft.altSequence;
   const cur = seq?.[draft.currentPickIndex];
   if (!cur) return;
@@ -175,7 +185,7 @@ function getOrCreateDraft(slug) {
       currentPhase: 'main',
       makeupPicks: {},
       subs: [], pot: 25 * OWNERS.length,
-      timerStart: null, timerDuration: 7200,
+      timerStart: null, timerDuration: 14400,
       locked: false, undoStack: [], redoStack: [],
       espnEventId: null
     };
