@@ -21,7 +21,7 @@ async function fbSet(path, val) { if (!fbDb) return; try { await fbDb.ref(path).
 async function fbUpdate(path, val) { if (!fbDb) return; try { await fbDb.ref(path).update(val); } catch(e) { console.error('fbUpdate error:', e.message); } }
 async function fbGet(path) { if (!fbDb) return null; try { const s = await fbDb.ref(path).once('value'); return s.val(); } catch(e) { console.error('fbGet error:', e.message); return null; } }
 
-// ── GroupMe bot ────────────────────────────────────────────────────
+// ── GroupMe bot (f115e1cbd1afed2cc5c57a69f1)────────────────────────────────────────────────────
 const GOLF_GROUPME_BOT_ID = process.env.GOLF_GROUPME_BOT_ID || '5f4343df04ccbddee0be626d14';
 const GOLF_GROUPME_DRY_RUN = process.env.GOLF_GROUPME_DRY_RUN === 'true';
 
