@@ -22,7 +22,7 @@ async function fbUpdate(path, val) { if (!fbDb) return; try { await fbDb.ref(pat
 async function fbGet(path) { if (!fbDb) return null; try { const s = await fbDb.ref(path).once('value'); return s.val(); } catch(e) { console.error('fbGet error:', e.message); return null; } }
 
 // ── GroupMe bot (f115e1cbd1afed2cc5c57a69f1)────────────────────────────────────────────────────
-const GOLF_GROUPME_BOT_ID = process.env.GOLF_GROUPME_BOT_ID || 'f115e1cbd1afed2cc5c57a69f1';
+const GOLF_GROUPME_BOT_ID = process.env.GOLF_GROUPME_BOT_ID || '5f4343df04ccbddee0be626d14';
 const GOLF_GROUPME_DRY_RUN = process.env.GOLF_GROUPME_DRY_RUN === 'true';
 
 // GroupMe member IDs for @ mentions
@@ -116,8 +116,22 @@ function checkDraftTimer(slug, warningsFired) {
   if (!draft || draft.status !== 'drafting' || !draft.timerStart) return;
   // Pause timer between 10pm and 8am ET — slide timerStart forward to exclude night time
   if (isDraftNightHours()) {
+    // On the first tick into night hours, snapshot remaining secs and persist it
+    // so clients that refresh overnight can display the correct frozen time
+    if (!draft.frozenSecsRemaining) {
+      const elapsed = (Date.now() - draft.timerStart) / 1000;
+      draft.frozenSecsRemaining = Math.max(0, (draft.timerDuration || 14400) - elapsed);
+      syncDraft(slug, draft);
+    }
     draft.timerStart = Date.now();
     return;
+  }
+  // Resuming from night — clear the frozen snapshot so normal countdown resumes
+  if (draft.frozenSecsRemaining) {
+    draft.timerDuration = draft.frozenSecsRemaining;
+    draft.timerStart = Date.now();
+    draft.frozenSecsRemaining = null;
+    syncDraft(slug, draft);
   }
   const elapsed = (Date.now() - draft.timerStart) / 1000;
   const remaining = (draft.timerDuration || 14400) - elapsed;
