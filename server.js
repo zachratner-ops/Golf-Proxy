@@ -435,7 +435,16 @@ async function pollAllLiveSlugs() {
       }
       await fbUpdate(`golf/${slug}/live`, scoreUpdates);
 
-      // Append chart snapshot to Firebase so history survives page reloads
+      // Append chart snapshot only once rounds have started (Thu 7am ET or later)
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const dayET = nowET.getDay(); // 0=Sun,1=Mon,...,4=Thu
+      const hourET = nowET.getHours();
+      const roundsStarted = dayET > 4 || (dayET === 4 && hourET >= 7); // Thu 7am ET onward
+      if (!roundsStarted) {
+        console.log(`[poller] Skipping snapshot — rounds not yet started (before Thu 7am ET)`);
+        console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players`);
+        continue;
+      }
       // Build owner team scores from current picks + new scores
       const draftPicks = draftData?.picks || {};
       const draftOwners = draftData?.owners || [];
