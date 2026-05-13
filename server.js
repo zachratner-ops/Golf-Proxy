@@ -736,6 +736,42 @@ app.post('/golf/:slug/field-remove', async (req, res) => {
 });
 
 
+app.post('/golf/:slug/rename-player', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { oldName, newName } = req.body;
+  if (!oldName || !newName) return res.status(400).json({ error: 'oldName and newName required' });
+
+  const norm = n => n.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9 _-]/g, '_');
+
+  // Update draft in memory
+  draft.field = draft.field.map(p => p.name === oldName ? { ...p, name: newName } : p);
+  draft.autopickList = (draft.autopickList || []).map(n => n === oldName ? newName : n);
+  for (const owner of Object.keys(draft.picks || {})) {
+    const slot = draft.picks[owner];
+    if (slot.golfers) slot.golfers = slot.golfers.map(g => g.name === oldName ? { ...g, name: newName } : g);
+    if (slot.alternate?.name === oldName) slot.alternate = { ...slot.alternate, name: newName };
+  }
+
+  // Update live scores key in Firebase
+  const oldKey = norm(oldName);
+  const newKey = norm(newName);
+  const liveScores = await fbGet(`golf/${slug}/live/scores/${oldKey}`);
+  if (liveScores) {
+    await fbSet(`golf/${slug}/live/scores/${newKey}`, { ...liveScores, espnName: liveScores.espnName || newName });
+    await fbSet(`golf/${slug}/live/scores/${oldKey}`, null);
+  }
+  // Update manualOverrides key if present
+  const override = await fbGet(`golf/${slug}/live/manualOverrides/${oldKey}`);
+  if (override) {
+    await fbUpdate(`golf/${slug}/live/manualOverrides`, { [newKey]: newName, [oldKey]: null });
+  }
+
+  await syncDraft(slug, draft);
+  broadcast(slug, { type: 'state', draft });
+  res.json({ ok: true });
+});
+
 app.post('/golf/:slug/scores/override', async (req, res) => {
   const slug = req.params.slug;
   const { playerName, score, cut } = req.body;
@@ -1017,7 +1053,7 @@ app.post('/golf/:slug/odds/seed', async (req, res) => {
     'Brian Harman':       { dk: '+12000',fd: '+12000'},
     'Adam Scott':         { dk: '+15000',fd: '+15000'},
     'Dustin Johnson':     { dk: '+15000',fd: '+15000'},
-    'JJ Spaun':           { dk: '+15000',fd: '+15000'},
+    'J.J. Spaun':         { dk: '+15000',fd: '+15000'},
     'Andrew Novak':       { dk: '+15000',fd: '+15000'},
     'Kurt Kitayama':      { dk: '+15000',fd: '+15000'},
     'Aldrich Potgieter':  { dk: '+20000',fd: '+20000'},
