@@ -383,6 +383,7 @@ async function fetchGolfScores(eventId) {
       const rawThru = c.status?.displayValue || null;
       const looksLikeTeeTime = rawThru && (/^\d{1,2}:\d{2}/.test(rawThru) || (rawThru.includes('T') && rawThru.includes('Z')));
       const thru = (statusName === 'STATUS_IN_PROGRESS' && looksLikeTeeTime) ? null : (rawThru?.replace(/\*$/, '') || null);
+      if (statusName === 'STATUS_IN_PROGRESS') console.log(`[thru debug] ${name}: rawThru="${rawThru}" looksLikeTeeTime=${looksLikeTeeTime} thru="${thru}" teeTime="${c.status?.teeTime}"`);
       // Tee time — present when player hasn't started their round yet
       const teeTime = c.status?.teeTime || null;
 
