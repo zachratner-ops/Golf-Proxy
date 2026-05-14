@@ -495,7 +495,7 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 function isTournamentHours() {
   const hour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
-  return hour >= 7 && hour < 19; // 7am-7pm ET
+  return hour >= 7 && hour < 20; // 7am-8pm ET
 }
 
 // Start polling and warm cache after Firebase connects
@@ -506,10 +506,10 @@ setTimeout(async () => {
     if (isTournamentHours()) {
       pollAllLiveSlugs();
     } else {
-      console.log('[poller] Outside tournament hours (7am-7pm ET) — skipping');
+      console.log('[poller] Outside tournament hours (7am-8pm ET) — skipping');
     }
   }, POLL_INTERVAL_MS);
-  console.log(`[poller] Score poller started — interval: 5min, active 7am-7pm ET`);
+  console.log(`[poller] Score poller started — interval: 5min, active 7am-8pm ET`);
 }, 5000);
 
 // ── Sub window scheduler ───────────────────────────────────────────
