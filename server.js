@@ -378,7 +378,11 @@ async function fetchGolfScores(eventId) {
 
       // Thru / current hole — ESPN uses status.displayValue e.g. "F", "Thru 14", "*3"
       // For players who haven't teed off, displayValue often contains the tee time e.g. "10:30 AM"
-      const thru = c.status?.displayValue || null;
+      // For STATUS_IN_PROGRESS, ESPN sometimes puts the NEXT round's tee time in displayValue —
+      // guard against this by only using displayValue if it looks like a hole indicator
+      const rawThru = c.status?.displayValue || null;
+      const looksLikeTeeTime = rawThru && (/^\d{1,2}:\d{2}/.test(rawThru) || (rawThru.includes('T') && rawThru.includes('Z')));
+      const thru = (statusName === 'STATUS_IN_PROGRESS' && looksLikeTeeTime) ? null : rawThru;
       // Tee time — present when player hasn't started their round yet
       const teeTime = c.status?.teeTime || null;
 
