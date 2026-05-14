@@ -503,6 +503,118 @@ setTimeout(async () => {
   console.log(`[poller] Score poller started — interval: 5min, active 7am-7pm ET`);
 }, 5000);
 
+// ── Sub window scheduler ───────────────────────────────────────────
+// Fires GroupMe messages and opens/closes sub windows automatically.
+// Uses Firebase flags (live/subScheduleFlags) to avoid re-sending on restart.
+
+async function getPoolLeader(slug) {
+  try {
+    const golfNode = await fbGet(`golf/${slug}`);
+    const draftData = golfNode?.draft || {};
+    const liveData = golfNode?.live || {};
+    const scores = liveData.scores || {};
+    const draftPicks = draftData.picks || {};
+    const draftOwners = draftData.owners || [];
+    const allSubs = Array.isArray(liveData.subs) ? liveData.subs : Object.values(liveData.subs || {});
+    let best = null;
+    draftOwners.forEach(owner => {
+      const picks = draftPicks[owner] || { golfers: [] };
+      const ownerSub = allSubs.find(s => s.owner === owner);
+      let golfers = picks.golfers.map(g => ({ ...g }));
+      if (ownerSub) golfers = golfers.filter(g => g.name !== ownerSub.from).concat([{ name: ownerSub.to }]);
+      const active = golfers.map(g => {
+        const normName = g.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9 _-]/g,'_');
+        const s = scores[normName] || scores[Object.keys(scores).find(k => k.split(' ').pop().toLowerCase() === normName.split(' ').pop().toLowerCase())] || null;
+        return s && !s.cut ? s.score : null;
+      }).filter(s => s !== null).sort((a,b) => a - b);
+      const teamScore = active.length >= 3 ? active.slice(0, 3).reduce((a,b) => a+b, 0) : null;
+      if (teamScore !== null && (best === null || teamScore < best.score)) best = { owner, score: teamScore };
+    });
+    return best;
+  } catch(e) {
+    console.error('[subScheduler] getPoolLeader error:', e.message);
+    return null;
+  }
+}
+
+function formatScore(n) {
+  if (n === 0) return 'E';
+  return n > 0 ? `+${n}` : `${n}`;
+}
+
+async function checkSubSchedule() {
+  if (!fbDb) return;
+  try {
+    const golfNode = await fbGet('golf');
+    if (!golfNode) return;
+    const slugs = Object.keys(golfNode).filter(k => k !== 'history' && /^[a-zA-Z0-9_-]+$/.test(k));
+
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const day = nowET.getDay();   // 4=Thu, 5=Fri, 6=Sat
+    const hour = nowET.getHours();
+    const min = nowET.getMinutes();
+
+    // Schedule: Thu 20:00 open R1, Fri 06:00 close R1, Fri 20:00 open R2, Sat 06:00 close R2
+    const events = [
+      { flag: 'r1Open',  day: 4, hour: 20, min: 0, action: 'open',  round: 1 },
+      { flag: 'r1Close', day: 5, hour:  6, min: 0, action: 'close', round: 1 },
+      { flag: 'r2Open',  day: 5, hour: 20, min: 0, action: 'open',  round: 2 },
+      { flag: 'r2Close', day: 6, hour:  6, min: 0, action: 'close', round: 2 },
+    ];
+
+    for (const evt of events) {
+      if (day !== evt.day || hour !== evt.hour || min !== evt.min) continue;
+
+      for (const slug of slugs) {
+        const liveData = golfNode[slug]?.live || {};
+        const draftData = golfNode[slug]?.draft || {};
+        if (draftData.status !== 'live') continue;
+
+        const flags = liveData.subScheduleFlags || {};
+        if (flags[evt.flag]) continue; // already fired
+
+        // Mark fired immediately to prevent duplicate sends
+        await fbUpdate(`golf/${slug}/live/subScheduleFlags`, { [evt.flag]: true });
+
+        const link = `gyou.in/golf-live.html?slug=${slug}`;
+
+        if (evt.action === 'open') {
+          // Open the sub window
+          await fbUpdate(`golf/${slug}/live`, { subWindowOpen: true, subWindowRound: evt.round });
+
+          // Get pool leader for the message
+          const leader = await getPoolLeader(slug);
+          const leaderLine = leader
+            ? `🏆 ${leader.owner} is in the lead at ${formatScore(leader.score)}.`
+            : '';
+          const cost = evt.round === 1 ? '$5' : '$15';
+          const roundLabel = evt.round === 1 ? 'Round 1' : 'Round 2';
+          const msg = evt.round === 1
+            ? `⛳ Good evening, players! ${roundLabel} is in the books and the sub window is now open.\n\n${leaderLine}\n\nYou have until tomorrow morning to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 ${link}`
+            : `⛳ Good evening! ${roundLabel} is complete and the sub window is open for the weekend.\n\n${leaderLine}\n\nYou have until tomorrow morning to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 ${link}`;
+
+          await postDraftGroupMe(msg);
+          console.log(`[subScheduler] Opened R${evt.round} sub window for ${slug}, posted GroupMe`);
+        } else {
+          // Close the sub window
+          await fbUpdate(`golf/${slug}/live`, { subWindowOpen: false });
+
+          const roundLabel = evt.round === 1 ? 'Round 2' : 'the final rounds';
+          const msg = `🔒 The Round ${evt.round} sub window is now closed. Good luck out there — let's see who makes a move in ${roundLabel}!`;
+
+          await postDraftGroupMe(msg);
+          console.log(`[subScheduler] Closed R${evt.round} sub window for ${slug}, posted GroupMe`);
+        }
+      }
+    }
+  } catch(e) {
+    console.error('[subScheduler] Error:', e.message);
+  }
+}
+
+setInterval(checkSubSchedule, 60 * 1000); // check every minute
+console.log('[subScheduler] Sub window scheduler started');
+
 // ── WebSocket ──────────────────────────────────────────────────────
 const clients = {};
 function broadcast(slug, msg) {
