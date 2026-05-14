@@ -465,7 +465,11 @@ async function pollAllLiveSlugs() {
         const active = golfers.map(g => {
           const normName = g.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9 _-]/g,'_');
           const s = result.players[normName] || result.players[Object.keys(result.players).find(k => k.split(' ').pop().toLowerCase() === normName.split(' ').pop().toLowerCase())] || null;
-          return s && !s.cut ? s.score : null;
+          if (!s || s.cut) return null;
+          // Only count golfers who have actually started (thru is F, Thru N, or status is finished/in-progress)
+          const hasStarted = s.status === 'STATUS_FINISH' || s.status === 'STATUS_IN_PROGRESS' ||
+            (s.thru && !s.thru.includes('Z') && s.thru !== '-');
+          return hasStarted ? s.score : null;
         }).filter(s => s !== null).sort((a,b) => a - b);
         snapshotScores[owner] = active.length >= 3 ? active.slice(0, 3).reduce((a,b) => a+b, 0) : null;
       });
@@ -1331,6 +1335,20 @@ async function postGolfGroupMe(slug, botId) {
   console.log('[groupme] Posted for slug:', slug, 'bot:', botId);
   return { ok: true, standings: standings.map(s => ({ owner: s.owner, total: s.totalDisplay })) };
 }
+
+app.post('/golf/:slug/sub', async (req, res) => {
+  const slug = req.params.slug;
+  const { owner, from, to, round, cost } = req.body;
+  if (!owner || !from || !to) return res.status(400).json({ error: 'owner, from, to required' });
+  const liveData = await fbGet(`golf/${slug}/live`);
+  const existingSubs = Array.isArray(liveData?.subs) ? liveData.subs : Object.values(liveData?.subs || {});
+  const newPot = (liveData?.pot || 0) + cost;
+  const newSub = { owner, from, to, round, cost, ts: new Date().toISOString() };
+  await fbUpdate(`golf/${slug}/live`, { subs: [...existingSubs, newSub], pot: newPot });
+  const msg = `🔄 ${owner} has subbed! ${from} is out, ${to} is in.\n\n💰 $${cost} added to the pot — new total: $${newPot}`;
+  await postDraftGroupMe(msg);
+  res.json({ ok: true, pot: newPot });
+});
 
 app.post('/golf/:slug/groupme', async (req, res) => {
   const slug = req.params.slug;
