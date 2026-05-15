@@ -314,11 +314,13 @@ async function fetchGolfScores(eventId) {
     // Cut line — ESPN exposes this on the competition object
     // Field names vary: cutLine, situation.cutLine, notes[type=cut]
     let cutLine = null;
-    console.log('[cutLine debug]', JSON.stringify({
+    console.log('[cutLine debug] competition keys:', Object.keys(competition || {}).join(', '));
+    console.log('[cutLine debug] detail:', JSON.stringify({
       cutLine: competition?.cutLine,
-      situationCutLine: competition?.situation?.cutLine,
-      situation: competition?.situation ? Object.keys(competition.situation) : null,
-      notes: (competition?.notes||[]).map(n => ({type:n.type,headline:n.headline,text:n.text})).slice(0,5)
+      cutScore: competition?.cutScore,
+      projectedCut: competition?.projectedCut,
+      situationKeys: competition?.situation ? Object.keys(competition.situation) : null,
+      notes: (competition?.notes||[]).slice(0,5)
     }));
     if (competition?.cutLine !== undefined) {
       cutLine = competition.cutLine; // numeric score to par
