@@ -480,8 +480,10 @@ async function pollAllLiveSlugs() {
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 function isTournamentHours() {
-  const hour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
-  return hour >= 7 && hour < 20; // 7am-8pm ET
+  const now = new Date();
+  const hour = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+  const min = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', minute: 'numeric' }), 10);
+  return hour >= 7 && (hour < 20 || (hour === 20 && min < 30)); // 7am-8:30pm ET
 }
 
 // Start polling and warm cache after Firebase connects
