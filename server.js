@@ -465,11 +465,7 @@ async function pollAllLiveSlugs() {
         const active = golfers.map(g => {
           const normName = g.name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9 _-]/g,'_');
           const s = result.players[normName] || result.players[Object.keys(result.players).find(k => k.split(' ').pop().toLowerCase() === normName.split(' ').pop().toLowerCase())] || null;
-          if (!s || s.cut) return null;
-          // Only count golfers who have actually started (thru is F, Thru N, or status is finished/in-progress)
-          const hasStarted = s.status === 'STATUS_FINISH' || s.status === 'STATUS_IN_PROGRESS' ||
-            (s.thru && !s.thru.includes('Z') && s.thru !== '-');
-          return hasStarted ? s.score : null;
+          return s && !s.cut ? s.score : null;
         }).filter(s => s !== null).sort((a,b) => a - b);
         snapshotScores[owner] = active.length >= 3 ? active.slice(0, 3).reduce((a,b) => a+b, 0) : null;
       });
