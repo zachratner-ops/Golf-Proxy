@@ -564,6 +564,7 @@ async function checkSubSchedule() {
         const liveData = golfNode[slug]?.live || {};
         const draftData = golfNode[slug]?.draft || {};
         if (draftData.status !== 'live') continue;
+        if (!liveData.subScheduleActive) continue;
 
         const flags = liveData.subScheduleFlags || {};
         if (flags[evt.flag]) continue; // already fired
