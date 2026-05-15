@@ -311,26 +311,9 @@ async function fetchGolfScores(eventId) {
     }
     console.log(`[scores] Round detection: period=${competition?.status?.period} desc="${competition?.status?.type?.description}" → ${currentRound}`);
 
-    // Cut line — ESPN exposes this on the competition object
-    // Field names vary: cutLine, situation.cutLine, notes[type=cut]
-    let cutLine = null;
-    console.log('[cutLine debug] competition keys:', Object.keys(competition || {}).join(', '));
-    console.log('[cutLine debug] detail:', JSON.stringify({
-      cutLine: competition?.cutLine,
-      cutScore: competition?.cutScore,
-      projectedCut: competition?.projectedCut,
-      situationKeys: competition?.situation ? Object.keys(competition.situation) : null,
-      notes: (competition?.notes||[]).slice(0,5)
-    }));
-    if (competition?.cutLine !== undefined) {
-      cutLine = competition.cutLine; // numeric score to par
-    } else if (competition?.situation?.cutLine !== undefined) {
-      cutLine = competition.situation.cutLine;
-    } else {
-      // Try notes array — some ESPN responses put cut info here
-      const cutNote = (competition?.notes || []).find(n => n.type === 'cut' || (n.headline||'').toLowerCase().includes('cut'));
-      if (cutNote) cutLine = cutNote.headline || cutNote.text || null;
-    }
+    const eventData = data?.events?.[0] || {};
+    // Cut line — on tournament.cutScore (score to par at the cut)
+    const cutLine = eventData?.tournament?.cutScore ?? null;
     competitors.forEach(c => {
       const name = c.athlete?.displayName;
       if (!name) return;
