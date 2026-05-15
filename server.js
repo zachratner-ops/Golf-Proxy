@@ -382,10 +382,9 @@ async function fetchGolfScores(eventId) {
       // guard against this by only using displayValue if it looks like a hole indicator
       const rawThru = c.status?.displayValue || null;
       const looksLikeTeeTime = rawThru && (/^\d{1,2}:\d{2}/.test(rawThru) || (rawThru.includes('T') && rawThru.includes('Z')));
-      const thru = (statusName === 'STATUS_IN_PROGRESS' && looksLikeTeeTime) ? null : (rawThru?.replace(/\*$/, '') || null);
-      if (statusName === 'STATUS_IN_PROGRESS') console.log(`[thru debug] ${name}: rawThru="${rawThru}" looksLikeTeeTime=${looksLikeTeeTime} thru="${thru}" teeTime="${c.status?.teeTime}"`);
-      // Tee time — present when player hasn't started their round yet
-      const teeTime = c.status?.teeTime || null;
+      const thru = (statusName === 'STATUS_IN_PROGRESS' && looksLikeTeeTime) ? null : (rawThru?.replace(/\*+/g, '').trim() || null);
+      // Tee time — strip any asterisks (back-9 starters get a * appended by ESPN)
+      const teeTime = c.status?.teeTime?.replace(/\*+/g, '').trim() || null;
 
       const normalizedName = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const safeKey = normalizedName.replace(/[^a-zA-Z0-9 _-]/g, '_');
