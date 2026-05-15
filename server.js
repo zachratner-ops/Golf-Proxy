@@ -555,7 +555,7 @@ async function checkSubSchedule() {
     const events = [
       { flag: 'r1Open',  day: 4, hour: 20, min: 0, action: 'open',  round: 1 },
       { flag: 'r1Close', day: 5, hour:  6, min: 0, action: 'close', round: 1 },
-      { flag: 'r2Open',  day: 5, hour: 20, min: 20, action: 'open',  round: 2 },
+      { flag: 'r2Open',  day: 5, hour: 20, min: 10, action: 'open',  round: 2 },
       { flag: 'r2Close', day: 6, hour:  6, min: 0, action: 'close', round: 2 },
     ];
 
