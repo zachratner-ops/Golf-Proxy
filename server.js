@@ -1223,6 +1223,28 @@ app.post('/golf/:slug/odds/seed', async (req, res) => {
 });
 
 
+app.post('/golf/:slug/field/odds', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  const { name, odds_dk, odds_fd, odds_top5, odds_top10 } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  let found = false;
+  draft.field = draft.field.map(p => {
+    if (p.name !== name) return p;
+    found = true;
+    return { ...p,
+      odds_dk:    odds_dk    !== undefined ? (odds_dk    || null) : p.odds_dk,
+      odds_fd:    odds_fd    !== undefined ? (odds_fd    || null) : p.odds_fd,
+      odds_top5:  odds_top5  !== undefined ? (odds_top5  || null) : p.odds_top5,
+      odds_top10: odds_top10 !== undefined ? (odds_top10 || null) : p.odds_top10,
+    };
+  });
+  if (!found) return res.status(404).json({ error: 'Player not in field' });
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  res.json({ ok: true });
+});
+
 app.post('/golf/:slug/odds/manual', async (req, res) => {
   const slug = req.params.slug;
   const draft = getOrCreateDraft(slug);
