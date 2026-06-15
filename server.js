@@ -117,21 +117,24 @@ function checkDraftTimer(slug, warningsFired) {
   // Pause timer between 10pm and 8am ET — slide timerStart forward to exclude night time
   if (isDraftNightHours()) {
     // On the first tick into night hours, snapshot remaining secs and persist it
-    // so clients that refresh overnight can display the correct frozen time
-    if (!draft.frozenSecsRemaining) {
+    // so clients that refresh overnight can display the correct frozen time.
+    // Use == null (not !) so a legitimately-zero remaining is handled correctly.
+    if (draft.frozenSecsRemaining == null) {
       const elapsed = (Date.now() - draft.timerStart) / 1000;
       draft.frozenSecsRemaining = Math.max(0, (draft.timerDuration || 14400) - elapsed);
       syncDraft(slug, draft);
+      broadcast(slug, { type: 'state', draft });
     }
     draft.timerStart = Date.now();
     return;
   }
   // Resuming from night — clear the frozen snapshot so normal countdown resumes
-  if (draft.frozenSecsRemaining) {
+  if (draft.frozenSecsRemaining != null) {
     draft.timerDuration = draft.frozenSecsRemaining;
     draft.timerStart = Date.now();
     draft.frozenSecsRemaining = null;
     syncDraft(slug, draft);
+    broadcast(slug, { type: 'state', draft });
   }
   const elapsed = (Date.now() - draft.timerStart) / 1000;
   const remaining = (draft.timerDuration || 14400) - elapsed;
