@@ -627,6 +627,28 @@ function broadcast(slug, msg) {
 // ── Routes ─────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true, service: 'golf', firebase: !!fbDb, poller: 'active' }));
 
+// Manual poll — runs the full server-side score fetch for a single slug,
+// bypassing the tournament-hours gate. Safe to call at any time.
+app.post('/golf/:slug/poll', async (req, res) => {
+  const slug = req.params.slug;
+  const golfNode = await fbGet(`golf/${slug}`);
+  if (!golfNode) return res.status(404).json({ error: 'Slug not found' });
+  const liveData = golfNode.live || {};
+  const eventId = liveData.espnEventId;
+  if (!eventId) return res.status(400).json({ error: 'No ESPN event ID set' });
+  const result = await fetchGolfScores(eventId);
+  if (result.error) return res.status(502).json({ error: result.error });
+  const manualOverrides = liveData.manualOverrides || {};
+  Object.keys(manualOverrides).forEach(key => delete result.players[key]);
+  const scoreUpdates = { lastUpdated: result.updated };
+  Object.entries(result.players).forEach(([k, v]) => { scoreUpdates[`scores/${k}`] = v; });
+  if (result.round && result.round !== liveData.round) scoreUpdates['round'] = result.round;
+  if (result.cutLine != null) scoreUpdates['cutLine'] = result.cutLine;
+  await fbUpdate(`golf/${slug}/live`, scoreUpdates);
+  console.log(`[poll] Manual poll for ${slug}: ${Object.keys(result.players).length} players, round ${result.round}`);
+  res.json({ ok: true, players: Object.keys(result.players).length, round: result.round, cutLine: result.cutLine, updated: result.updated });
+});
+
 app.get('/golf/:slug', async (req, res) => {
   if (req.params.slug === 'history') return res.json({});
   const slug = req.params.slug;
