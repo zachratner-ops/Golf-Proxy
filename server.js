@@ -128,10 +128,13 @@ function checkDraftTimer(slug, warningsFired) {
     draft.timerStart = Date.now();
     return;
   }
-  // Resuming from night — clear the frozen snapshot so normal countdown resumes
+  // Resuming from night — clear the frozen snapshot so normal countdown resumes.
+  // Backdate timerStart so elapsed = timerDuration - frozenSecsRemaining, which
+  // preserves the remaining time without corrupting timerDuration. That way the
+  // next pick still resets to the full configured duration (4 hrs), not 2:27.
   if (draft.frozenSecsRemaining != null) {
-    draft.timerDuration = draft.frozenSecsRemaining;
-    draft.timerStart = Date.now();
+    const elapsedBeforeFreeze = Math.max(0, (draft.timerDuration || 14400) - draft.frozenSecsRemaining);
+    draft.timerStart = Date.now() - elapsedBeforeFreeze * 1000;
     draft.frozenSecsRemaining = null;
     syncDraft(slug, draft);
     broadcast(slug, { type: 'state', draft });
