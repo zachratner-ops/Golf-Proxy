@@ -705,6 +705,21 @@ app.post('/golf/:slug/start', async (req, res) => {
   res.json(draft);
 });
 
+// Commissioner: restart the pick clock at the full duration. Clears any
+// overnight freeze snapshot; if it's still night hours the next timer tick
+// re-freezes at the full duration so it resumes at 4:00 in the morning.
+app.post('/golf/:slug/timer-reset', async (req, res) => {
+  const slug = req.params.slug;
+  const draft = getOrCreateDraft(slug);
+  if (draft.status !== 'drafting') return res.status(400).json({ error: 'Not drafting' });
+  draft.timerStart = Date.now();
+  draft.frozenSecsRemaining = null;
+  if (draftTimers[slug]) draftTimers[slug].warningsFired.clear();
+  broadcast(slug, { type: 'state', draft });
+  await syncDraft(slug, draft);
+  res.json({ ok: true, timerDuration: draft.timerDuration || 14400 });
+});
+
 app.post('/golf/:slug/reset', async (req, res) => {
   const slug = req.params.slug;
   stopDraftTimer(slug);
@@ -750,6 +765,10 @@ app.post('/golf/:slug/pick', async (req, res) => {
     else { draft.status = 'complete'; draft.locked = true; }
   }
   draft.timerStart = Date.now();
+  // A pick resets the clock to the full duration — drop any overnight freeze
+  // snapshot so the timer restarts at 4:00, not the previous pick's remaining.
+  // If it's still night, the next timer tick re-freezes at the full duration.
+  draft.frozenSecsRemaining = null;
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
 
@@ -795,6 +814,7 @@ app.post('/golf/:slug/undo', async (req, res) => {
   const prev = draft.undoStack.pop();
   Object.assign(draft, prev);
   draft.timerStart = Date.now();
+  draft.frozenSecsRemaining = null;
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
   res.json(draft);
@@ -815,6 +835,7 @@ app.post('/golf/:slug/redo', async (req, res) => {
   const next = draft.redoStack.pop();
   Object.assign(draft, next);
   draft.timerStart = Date.now();
+  draft.frozenSecsRemaining = null;
   broadcast(slug, { type: 'state', draft });
   await syncDraft(slug, draft);
   res.json(draft);
