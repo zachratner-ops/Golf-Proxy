@@ -459,6 +459,15 @@ async function pollAllLiveSlugs() {
         console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players`);
         continue;
       }
+      // Once every player is final for the day (finished, cut, WD or DQ —
+      // nobody scheduled or mid-round), write one last snapshot with the
+      // closing scores and shut the window early so the chart doesn't get
+      // a flat tail until last tee + 7h. Reopens when the next round's tee
+      // times move the window forward.
+      const TERMINAL_STATUSES = ['STATUS_FINISH', 'STATUS_CUT', 'STATUS_WD', 'STATUS_DQ'];
+      const statuses = Object.values(result.players).map(p => p.status);
+      const allPlayersFinal = statuses.length > 0 && statuses.every(s => TERMINAL_STATUSES.includes(s));
+      if (allPlayersFinal) closeSlugWindow(slug);
       // Build owner team scores from current picks + new scores
       const draftPicks = draftData?.picks || {};
       const draftOwners = draftData?.owners || [];
@@ -514,10 +523,24 @@ function updateSlugWindow(slug, result) {
   const start = new Date(result.firstTee).getTime() - WINDOW_PRE_TEE_MS;
   const end = new Date(result.lastTee || result.firstTee).getTime() + WINDOW_POST_TEE_MS;
   const prev = slugWindows[slug];
+  // Same round already closed early (all players final) — keep it closed
+  // until ESPN's tee times roll over to the next round.
+  if (prev && prev.closed && prev.start === start) return;
   if (!prev || prev.fallback || prev.start !== start || prev.end !== end) {
     console.log(`[poller] Play window for ${slug}: ${new Date(start).toISOString()} – ${new Date(end).toISOString()}`);
   }
   slugWindows[slug] = { start, end };
+}
+
+// Close the window for the rest of the day. The caller writes the final
+// snapshot on this same tick (the gate has already passed), so the chart
+// ends on the closing scores rather than a flat tail.
+function closeSlugWindow(slug) {
+  const w = slugWindows[slug];
+  if (!w || w.fallback || w.closed) return;
+  w.end = Date.now();
+  w.closed = true;
+  console.log(`[poller] All players final — closing play window for ${slug} until next round's tee times`);
 }
 
 function isFallbackHours() {
