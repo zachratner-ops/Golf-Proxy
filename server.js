@@ -587,7 +587,9 @@ setTimeout(async () => {
 // Fires GroupMe messages and opens/closes sub windows automatically.
 // Uses Firebase flags (live/subScheduleFlags) to avoid re-sending on restart.
 
-async function getPoolLeader(slug) {
+// Every owner's team score (best 3 active golfers), sorted best-first.
+// score is null when fewer than 3 of the owner's golfers remain (cut/WD).
+async function getPoolStandings(slug) {
   try {
     const golfNode = await fbGet(`golf/${slug}`);
     const draftData = golfNode?.draft || {};
@@ -596,8 +598,7 @@ async function getPoolLeader(slug) {
     const draftPicks = draftData.picks || {};
     const draftOwners = draftData.owners || [];
     const allSubs = Array.isArray(liveData.subs) ? liveData.subs : Object.values(liveData.subs || {});
-    let best = null;
-    draftOwners.forEach(owner => {
+    const rows = draftOwners.map(owner => {
       const picks = draftPicks[owner] || { golfers: [] };
       const ownerSub = allSubs.find(s => s.owner === owner);
       let golfers = picks.golfers.map(g => ({ ...g }));
@@ -608,13 +609,26 @@ async function getPoolLeader(slug) {
         return s && !s.cut ? s.score : null;
       }).filter(s => s !== null).sort((a,b) => a - b);
       const teamScore = active.length >= 3 ? active.slice(0, 3).reduce((a,b) => a+b, 0) : null;
-      if (teamScore !== null && (best === null || teamScore < best.score)) best = { owner, score: teamScore };
+      return { owner, score: teamScore };
     });
-    return best;
+    rows.sort((a,b) => (a.score === null ? Infinity : a.score) - (b.score === null ? Infinity : b.score));
+    return rows;
   } catch(e) {
-    console.error('[subScheduler] getPoolLeader error:', e.message);
-    return null;
+    console.error('[subScheduler] getPoolStandings error:', e.message);
+    return [];
   }
+}
+
+// Plain-text scoreboard for GroupMe, with ties (T2) and eliminated teams
+function formatStandingsBoard(rows) {
+  const lines = [];
+  rows.forEach((r, i) => {
+    if (r.score === null) { lines.push(`\u2014  ${r.owner} (out)`); return; }
+    const firstIdx = rows.findIndex(x => x.score === r.score);
+    const tied = rows.filter(x => x.score === r.score).length > 1;
+    lines.push(`${tied ? 'T' : ''}${firstIdx + 1}. ${r.owner} ${formatScore(r.score)}`);
+  });
+  return lines.join('\n');
 }
 
 function formatScore(n) {
@@ -660,12 +674,12 @@ async function manageSubWindows(slug, liveData, result, allPlayersFinal, inWindo
       // Mark fired immediately so a concurrent tick can't double-send
       await fbUpdate(`golf/${slug}/live/subScheduleFlags`, { [`r${n}Open`]: true });
       await fbUpdate(`golf/${slug}/live`, { subWindowOpen: true, subWindowRound: n });
-      const leader = await getPoolLeader(slug);
-      const leaderLine = leader
-        ? `🏆 ${leader.owner} is in the lead at ${formatScore(leader.score)}.`
+      const standings = await getPoolStandings(slug);
+      const board = standings.length
+        ? `\n\n📊 Scores after Round ${n}:\n${formatStandingsBoard(standings)}`
         : '';
       const cost = n === 1 ? '$5' : '$15';
-      const msg = `⛳ That's a wrap on Round ${n} — the sub window is now open!\n\n${leaderLine}\n\nYou have until the next round's first tee to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 gyou.in/golf-live.html?slug=${slug}`;
+      const msg = `⛳ That's a wrap on Round ${n} — the sub window is now open!${board}\n\nYou have until the next round's first tee to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 gyou.in/golf-live.html?slug=${slug}`;
       await postDraftGroupMe(msg);
       console.log(`[subWindows] Opened R${n} sub window for ${slug}, posted GroupMe`);
     }
