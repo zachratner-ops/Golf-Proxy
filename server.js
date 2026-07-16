@@ -387,8 +387,22 @@ async function fetchGolfScores(eventId) {
       const safeKey = normalizedName.replace(/[^a-zA-Z0-9 _-]/g, '_');
       players[safeKey] = { score: toPar, display, cut, status: statusName, espnName: name, roundScore, thru, teeTime, position };
     });
-    console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed, round ${currentRound}, cutLine ${cutLine}`);
-    return { players, updated: new Date().toISOString(), round: currentRound, cutLine };
+    // First/last tee time of the current round — drives the poll window.
+    // Finished players can already carry the NEXT round's tee time, so only
+    // count times within 14h of the earliest as the same round.
+    let firstTee = null, lastTee = null;
+    const teeMs = Object.values(players)
+      .map(p => p.teeTime ? new Date(p.teeTime).getTime() : NaN)
+      .filter(t => !isNaN(t));
+    if (teeMs.length > 0) {
+      const first = Math.min(...teeMs);
+      const sameRound = teeMs.filter(t => t - first <= 14 * 60 * 60 * 1000);
+      firstTee = new Date(first).toISOString();
+      lastTee = new Date(Math.max(...sameRound)).toISOString();
+    }
+
+    console.log(`[scores] Event ${eventId}: ${Object.keys(players).length} players parsed, round ${currentRound}, cutLine ${cutLine}, tees ${firstTee}–${lastTee}`);
+    return { players, updated: new Date().toISOString(), round: currentRound, cutLine, firstTee, lastTee };
   } catch(e) {
     console.error('[scores] fetch error:', e.message);
     return { error: e.message };
@@ -436,13 +450,12 @@ async function pollAllLiveSlugs() {
       }
       await fbUpdate(`golf/${slug}/live`, scoreUpdates);
 
-      // Append chart snapshot only once rounds have started (Thu 7am ET or later)
-      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const dayET = nowET.getDay(); // 0=Sun,1=Mon,...,4=Thu
-      const hourET = nowET.getHours();
-      const roundsStarted = dayET === 0 || dayET > 4 || (dayET === 4 && hourET >= 7); // Thu 7am ET through Sunday
-      if (!roundsStarted) {
-        console.log(`[poller] Skipping snapshot — rounds not yet started (before Thu 7am ET)`);
+      // Append chart snapshot only while the day's round is in its play
+      // window (first tee − 15min through last tee + 7h). Tee times come
+      // from ESPN, so overnight-ET starts (e.g. The Open) work too.
+      updateSlugWindow(slug, result);
+      if (!inPlayWindow(slug)) {
+        console.log(`[poller] Skipping snapshot for ${slug} — outside play window`);
         console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players`);
         continue;
       }
@@ -485,25 +498,60 @@ async function pollAllLiveSlugs() {
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-function isTournamentHours() {
-  const now = new Date();
-  const hour = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
-  const min = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', minute: 'numeric' }), 10);
-  return hour >= 7 && (hour < 20 || (hour === 20 && min < 30)); // 7am-8:30pm ET
+// ── Play windows ───────────────────────────────────────────────────
+// Per-slug window derived from ESPN tee times: first tee − 15min through
+// last tee + 7h (last group needs ~5.5h). Handles rounds that start
+// overnight ET (The Open tees off ~1:30am ET). When ESPN gives no tee
+// times, falls back to the old fixed schedule: Thu 7am ET through Sunday,
+// 7am–8:30pm ET each day.
+const slugWindows = {}; // slug -> { start, end } in ms, or { fallback: true }
+
+const WINDOW_PRE_TEE_MS  = 15 * 60 * 1000;
+const WINDOW_POST_TEE_MS = 7 * 60 * 60 * 1000;
+
+function updateSlugWindow(slug, result) {
+  if (!result.firstTee) { slugWindows[slug] = { fallback: true }; return; }
+  const start = new Date(result.firstTee).getTime() - WINDOW_PRE_TEE_MS;
+  const end = new Date(result.lastTee || result.firstTee).getTime() + WINDOW_POST_TEE_MS;
+  const prev = slugWindows[slug];
+  if (!prev || prev.fallback || prev.start !== start || prev.end !== end) {
+    console.log(`[poller] Play window for ${slug}: ${new Date(start).toISOString()} – ${new Date(end).toISOString()}`);
+  }
+  slugWindows[slug] = { start, end };
 }
 
-// Start polling and warm cache after Firebase connects
+function isFallbackHours() {
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = nowET.getDay(), hour = nowET.getHours(), min = nowET.getMinutes();
+  const roundsStarted = day === 0 || day > 4 || (day === 4 && hour >= 7); // Thu 7am ET through Sunday
+  const daytime = hour >= 7 && (hour < 20 || (hour === 20 && min < 30));  // 7am-8:30pm ET
+  return roundsStarted && daytime;
+}
+
+function inPlayWindow(slug) {
+  const w = slugWindows[slug];
+  if (!w || w.fallback) return isFallbackHours();
+  return Date.now() >= w.start && Date.now() <= w.end;
+}
+
+// Start polling and warm cache after Firebase connects.
+// Inside a play window: full poll every 5 min. Outside: refresh every
+// 15 min anyway — it keeps scores current and picks up the next round's
+// tee times so the window moves forward (snapshots stay window-gated).
 setTimeout(async () => {
   await warmCache();
   await pollAllLiveSlugs();
+  let pollTick = 0;
   setInterval(() => {
-    if (isTournamentHours()) {
+    pollTick++;
+    const anyActive = Object.keys(slugWindows).some(inPlayWindow);
+    if (anyActive || pollTick % 3 === 0) {
       pollAllLiveSlugs();
     } else {
-      console.log('[poller] Outside tournament hours (7am-8pm ET) — skipping');
+      console.log('[poller] Outside play window — idle refresh every 15min');
     }
   }, POLL_INTERVAL_MS);
-  console.log(`[poller] Score poller started — interval: 5min, active 7am-8pm ET`);
+  console.log(`[poller] Score poller started — 5min in play window, 15min idle refresh`);
 }, 5000);
 
 // ── Sub window scheduler ───────────────────────────────────────────
