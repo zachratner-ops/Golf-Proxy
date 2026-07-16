@@ -450,23 +450,29 @@ async function pollAllLiveSlugs() {
       }
       await fbUpdate(`golf/${slug}/live`, scoreUpdates);
 
+      updateSlugWindow(slug, result);
+      // All players final = finished, cut, WD or DQ — nobody scheduled or
+      // mid-round. Marks the end of the day's play.
+      const TERMINAL_STATUSES = ['STATUS_FINISH', 'STATUS_CUT', 'STATUS_WD', 'STATUS_DQ'];
+      const statuses = Object.values(result.players).map(p => p.status);
+      const allPlayersFinal = statuses.length > 0 && statuses.every(s => TERMINAL_STATUSES.includes(s));
+
+      // Auto sub windows: open when the day's last golfer finishes R1/R2,
+      // close as the next round is about to tee off.
+      await manageSubWindows(slug, liveData, result, allPlayersFinal, inPlayWindow(slug));
+
       // Append chart snapshot only while the day's round is in its play
       // window (first tee − 15min through last tee + 7h). Tee times come
       // from ESPN, so overnight-ET starts (e.g. The Open) work too.
-      updateSlugWindow(slug, result);
       if (!inPlayWindow(slug)) {
         console.log(`[poller] Skipping snapshot for ${slug} — outside play window`);
         console.log(`[poller] Updated scores for ${slug} — ${Object.keys(result.players).length} players`);
         continue;
       }
-      // Once every player is final for the day (finished, cut, WD or DQ —
-      // nobody scheduled or mid-round), write one last snapshot with the
-      // closing scores and shut the window early so the chart doesn't get
-      // a flat tail until last tee + 7h. Reopens when the next round's tee
-      // times move the window forward.
-      const TERMINAL_STATUSES = ['STATUS_FINISH', 'STATUS_CUT', 'STATUS_WD', 'STATUS_DQ'];
-      const statuses = Object.values(result.players).map(p => p.status);
-      const allPlayersFinal = statuses.length > 0 && statuses.every(s => TERMINAL_STATUSES.includes(s));
+      // On the day's final tick, write one last snapshot with the closing
+      // scores and shut the window early so the chart doesn't get a flat
+      // tail until last tee + 7h. Reopens when the next round's tee times
+      // move the window forward.
       if (allPlayersFinal) closeSlugWindow(slug);
       // Build owner team scores from current picks + new scores
       const draftPicks = draftData?.picks || {};
@@ -616,79 +622,57 @@ function formatScore(n) {
   return n > 0 ? `+${n}` : `${n}`;
 }
 
-async function checkSubSchedule() {
-  if (!fbDb) return;
+// ── Auto sub windows ───────────────────────────────────────────────
+// Event-driven, called from the score poller on every poll:
+//  · OPEN when the day's last golfer finishes Round 1 or Round 2 (all
+//    players in a terminal state) — announces on GroupMe with the leader.
+//  · CLOSE on the first poll inside the next round's play window (~15 min
+//    before its first tee) — announces on GroupMe.
+// One-shot flags (subScheduleFlags.r1Open/r1Close/r2Open/r2Close) live in
+// Firebase so restarts can't double-fire. Which window opens is decided by
+// the flags: first completed round → R1 ($5), second → R2 ($15); nothing
+// opens after round 2. Set live/subScheduleActive to false to disable
+// automation for a slug (commissioner buttons keep working either way).
+async function manageSubWindows(slug, liveData, result, allPlayersFinal, inWindow) {
   try {
-    const golfNode = await fbGet('golf');
-    if (!golfNode) return;
-    const slugs = Object.keys(golfNode).filter(k => k !== 'history' && /^[a-zA-Z0-9_-]+$/.test(k));
+    if (liveData?.subScheduleActive === false) return;
+    const flags = liveData?.subScheduleFlags || {};
 
-    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-    const day = nowET.getDay();   // 4=Thu, 5=Fri, 6=Sat
-    const hour = nowET.getHours();
-    const min = nowET.getMinutes();
+    // Close: a round is starting (or underway) while a sub window is open.
+    // Also fires for manually opened windows — a sub window never survives
+    // into live play.
+    if (liveData?.subWindowOpen && inWindow && !allPlayersFinal) {
+      const n = liveData.subWindowRound || 1;
+      await fbUpdate(`golf/${slug}/live`, { subWindowOpen: false });
+      // Mark open too, in case this window was opened manually
+      await fbUpdate(`golf/${slug}/live/subScheduleFlags`, { [`r${n}Open`]: true, [`r${n}Close`]: true });
+      const nextLabel = n === 1 ? 'Round 2 is' : 'the weekend rounds are';
+      await postDraftGroupMe(`🔒 The Round ${n} sub window is now closed — ${nextLabel} about to tee off. Good luck out there!`);
+      console.log(`[subWindows] Closed R${n} sub window for ${slug}, posted GroupMe`);
+      return;
+    }
 
-    // Schedule: Thu 20:00 open R1, Fri 06:00 close R1, Fri 20:00 open R2, Sat 06:00 close R2
-    const events = [
-      { flag: 'r1Open',  day: 4, hour: 20, min: 0, action: 'open',  round: 1 },
-      { flag: 'r1Close', day: 5, hour:  6, min: 0, action: 'close', round: 1 },
-      { flag: 'r2Open',  day: 5, hour: 20, min: 10, action: 'open',  round: 2 },
-      { flag: 'r2Close', day: 6, hour:  6, min: 0, action: 'close', round: 2 },
-    ];
-
-    for (const evt of events) {
-      if (day !== evt.day || hour !== evt.hour || min !== evt.min) continue;
-
-      for (const slug of slugs) {
-        const liveData = golfNode[slug]?.live || {};
-        const draftData = golfNode[slug]?.draft || {};
-        if (draftData.status !== 'live') continue;
-        if (!liveData.subScheduleActive) continue;
-
-        const flags = liveData.subScheduleFlags || {};
-        if (flags[evt.flag]) continue; // already fired
-
-        // Mark fired immediately to prevent duplicate sends
-        await fbUpdate(`golf/${slug}/live/subScheduleFlags`, { [evt.flag]: true });
-
-        const link = `gyou.in/golf-live.html?slug=${slug}`;
-
-        if (evt.action === 'open') {
-          // Open the sub window
-          await fbUpdate(`golf/${slug}/live`, { subWindowOpen: true, subWindowRound: evt.round });
-
-          // Get pool leader for the message
-          const leader = await getPoolLeader(slug);
-          const leaderLine = leader
-            ? `🏆 ${leader.owner} is in the lead at ${formatScore(leader.score)}.`
-            : '';
-          const cost = evt.round === 1 ? '$5' : '$15';
-          const roundLabel = evt.round === 1 ? 'Round 1' : 'Round 2';
-          const msg = evt.round === 1
-            ? `⛳ Good evening, players! ${roundLabel} is in the books and the sub window is now open.\n\n${leaderLine}\n\nYou have until tomorrow morning to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 ${link}`
-            : `⛳ Good evening! ${roundLabel} is complete and the sub window is open for the weekend.\n\n${leaderLine}\n\nYou have until tomorrow morning to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 ${link}`;
-
-          await postDraftGroupMe(msg);
-          console.log(`[subScheduler] Opened R${evt.round} sub window for ${slug}, posted GroupMe`);
-        } else {
-          // Close the sub window
-          await fbUpdate(`golf/${slug}/live`, { subWindowOpen: false });
-
-          const roundLabel = evt.round === 1 ? 'Round 2' : 'the final rounds';
-          const msg = `🔒 The Round ${evt.round} sub window is now closed. Good luck out there — let's see who makes a move in ${roundLabel}!`;
-
-          await postDraftGroupMe(msg);
-          console.log(`[subScheduler] Closed R${evt.round} sub window for ${slug}, posted GroupMe`);
-        }
-      }
+    // Open: the day's round just completed and an R1/R2 window hasn't run
+    if (allPlayersFinal && !liveData?.subWindowOpen) {
+      if (result.round && result.round > 2) return; // no windows after R2
+      const n = !flags.r1Open ? 1 : (!flags.r2Open ? 2 : null);
+      if (!n) return;
+      // Mark fired immediately so a concurrent tick can't double-send
+      await fbUpdate(`golf/${slug}/live/subScheduleFlags`, { [`r${n}Open`]: true });
+      await fbUpdate(`golf/${slug}/live`, { subWindowOpen: true, subWindowRound: n });
+      const leader = await getPoolLeader(slug);
+      const leaderLine = leader
+        ? `🏆 ${leader.owner} is in the lead at ${formatScore(leader.score)}.`
+        : '';
+      const cost = n === 1 ? '$5' : '$15';
+      const msg = `⛳ That's a wrap on Round ${n} — the sub window is now open!\n\n${leaderLine}\n\nYou have until the next round's first tee to sub in your alternate for ${cost} added to the pot. Head to the link to make your move.\n\n🔗 gyou.in/golf-live.html?slug=${slug}`;
+      await postDraftGroupMe(msg);
+      console.log(`[subWindows] Opened R${n} sub window for ${slug}, posted GroupMe`);
     }
   } catch(e) {
-    console.error('[subScheduler] Error:', e.message);
+    console.error('[subWindows] Error:', e.message);
   }
 }
-
-setInterval(checkSubSchedule, 60 * 1000); // check every minute
-console.log('[subScheduler] Sub window scheduler started');
 
 // ── WebSocket ──────────────────────────────────────────────────────
 const clients = {};
